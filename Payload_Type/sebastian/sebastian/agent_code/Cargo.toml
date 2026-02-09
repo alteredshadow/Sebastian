@@ -1,0 +1,70 @@
+[package]
+name = "sebastian"
+version = "0.1.0"
+edition = "2021"
+description = "Sebastian Mythic C2 Agent"
+build = "build.rs"
+
+[[bin]]
+name = "sebastian"
+path = "src/main.rs"
+
+[lib]
+name = "sebastian"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+default = ["http"]
+http = []
+websocket = []
+tcp = []
+dns = []
+httpx = []
+dynamichttp = []
+debug_mode = []
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "cookies"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+hickory-client = "0.25"
+prost = "0.13"
+base64 = "0.22"
+data-encoding = "2"
+rsa = "0.9"
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+nix = { version = "0.29", features = ["process", "signal", "term", "user", "fs", "hostname"] }
+libc = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+hostname = "0.4"
+sysinfo = "0.31"
+local-ip-address = "0.6"
+plist = "1"
+log = "0.4"
+env_logger = "0.11"
+bytes = "1"
+futures = "0.3"
+async-trait = "0.1"
+pkcs8 = { version = "0.10", features = ["pem"] }
+cipher = "0.4"
+lazy_static = "1"
+url = "2"
+percent-encoding = "2"
+regex = "1"
+png = "0.17"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+core-graphics = "0.24"
+
+[build-dependencies]
+prost-build = "0.13"
