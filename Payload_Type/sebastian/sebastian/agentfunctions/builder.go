@@ -431,7 +431,13 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	}
 
 	// Build the cargo command
+	// Use cargo-zigbuild for macOS targets (provides cross-compilation C compiler)
+	cargoCmd := "cargo"
 	cargoArgs := []string{"build", "--release", "--target", rustTarget}
+	if targetOs == "darwin" {
+		cargoCmd = "cargo"
+		cargoArgs = []string{"zigbuild", "--release", "--target", rustTarget}
+	}
 	if crateType != "bin" {
 		// For library builds, we need to set the crate type
 		// The Cargo.toml should have both bin and lib targets
@@ -446,7 +452,7 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	if static && targetOs == "linux" {
 		rustflags += "-C target-feature=+crt-static "
 	}
-	// Set cross-compilation linker
+	// Set cross-compilation linker for Linux targets
 	if targetOs == "linux" {
 		if rustArch == "aarch64" {
 			rustflags += "-C linker=aarch64-linux-gnu-gcc "
@@ -477,7 +483,7 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	})
 
 	// Execute cargo build
-	cmd := exec.Command("cargo", cargoArgs...)
+	cmd := exec.Command(cargoCmd, cargoArgs...)
 	cmd.Dir = "./sebastian/agent_code/"
 
 	// Set environment variables

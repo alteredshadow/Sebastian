@@ -19,7 +19,17 @@ RUN apt-get update && apt-get install -y \
     g++-aarch64-linux-gnu \
     libc6-dev-arm64-cross \
     protobuf-compiler \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Zig (used by cargo-zigbuild for macOS cross-compilation)
+RUN ZIG_VERSION=0.13.0 && \
+    ARCH=$(uname -m) && \
+    curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" | tar -xJ -C /usr/local && \
+    ln -s /usr/local/zig-linux-${ARCH}-${ZIG_VERSION}/zig /usr/local/bin/zig
+
+# Install cargo-zigbuild for macOS cross-compilation
+RUN cargo install cargo-zigbuild
 
 # Add cross-compilation targets for the Rust agent
 RUN rustup target add x86_64-unknown-linux-gnu \
