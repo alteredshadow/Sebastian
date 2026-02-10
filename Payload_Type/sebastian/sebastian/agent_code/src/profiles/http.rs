@@ -26,9 +26,9 @@ pub struct HttpInitialConfig {
     pub callback_port: i32,
     #[serde(rename = "post_uri")]
     pub post_uri: String,
-    #[serde(rename = "get_uri")]
+    #[serde(rename = "get_uri", default)]
     pub get_uri: String,
-    #[serde(rename = "query_path_name")]
+    #[serde(rename = "query_path_name", default)]
     pub query_path_name: String,
     #[serde(rename = "encrypted_exchange_check")]
     pub encrypted_exchange_check: bool,
