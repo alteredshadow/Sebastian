@@ -7,9 +7,18 @@ pub mod structs;
 pub mod tasks;
 pub mod utils;
 
+/// Auto-start when loaded as a shared library.
+/// Spawns a background thread so the loader's initialization can complete.
+#[ctor::ctor]
+fn _auto_start() {
+    std::thread::spawn(|| {
+        run_main();
+    });
+}
+
 /// Entry point for shared library mode.
-/// Reflective loaders and dlopen callers should invoke this symbol directly.
-/// Blocks the calling thread - spawn a thread first if you need dlopen to return.
+/// Reflective loaders and dlopen callers can also invoke this symbol directly.
+/// Blocks the calling thread.
 #[no_mangle]
 pub extern "C" fn run_main() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
