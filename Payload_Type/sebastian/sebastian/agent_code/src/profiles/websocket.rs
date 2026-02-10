@@ -109,46 +109,49 @@ impl WebsocketProfile {
         format!("{}://{}:{}{}", scheme, clean_host, port, endpoint)
     }
 
+    /// Format: base64( UUID_bytes + [AES_encrypt(data) | data] )
     fn encode_message(&self, data: &[u8]) -> String {
         let uuid = self.uuid.read().unwrap().clone();
         let aes_key = self.aes_key.read().unwrap();
 
-        let payload = if let Some(key) = aes_key.as_ref() {
-            let encrypted = crypto::aes_encrypt(key, data);
-            BASE64.encode(&encrypted)
+        let encrypted = if let Some(key) = aes_key.as_ref() {
+            crypto::aes_encrypt(key, data)
         } else {
-            BASE64.encode(data)
+            data.to_vec()
         };
 
-        format!("{}{}", uuid, payload)
+        let mut send_data = uuid.into_bytes();
+        send_data.extend_from_slice(&encrypted);
+        BASE64.encode(&send_data)
     }
 
     fn decode_response(&self, response_text: &str) -> Option<Vec<u8>> {
-        if response_text.len() < 36 {
+        let raw = BASE64.decode(response_text.trim()).ok()?;
+        if raw.len() < 36 {
             return None;
         }
-        let new_uuid = &response_text[..36];
-        let encoded_data = &response_text[36..];
+
+        let new_uuid = String::from_utf8_lossy(&raw[..36]).to_string();
+        let message_data = &raw[36..];
 
         {
             let current_uuid = self.uuid.read().unwrap().clone();
             if new_uuid != current_uuid {
                 let mut uuid = self.uuid.write().unwrap();
-                *uuid = new_uuid.to_string();
+                *uuid = new_uuid;
             }
         }
 
-        let decoded = BASE64.decode(encoded_data).ok()?;
         let aes_key = self.aes_key.read().unwrap();
         if let Some(key) = aes_key.as_ref() {
-            let decrypted = crypto::aes_decrypt(key, &decoded);
+            let decrypted = crypto::aes_decrypt(key, message_data);
             if decrypted.is_empty() {
                 None
             } else {
                 Some(decrypted)
             }
         } else {
-            Some(decoded)
+            Some(message_data.to_vec())
         }
     }
 
