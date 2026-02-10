@@ -57,7 +57,6 @@ async-trait = "0.1"
 pkcs8 = { version = "0.10", features = ["pem"] }
 cipher = "0.4"
 lazy_static = "1"
-ctor = "0.2"
 url = "2"
 percent-encoding = "2"
 regex = "1"

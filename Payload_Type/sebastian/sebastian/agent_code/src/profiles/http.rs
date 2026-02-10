@@ -218,6 +218,8 @@ impl HttpProfile {
         let headers = self.build_headers();
         let encoded = self.encode_message(data);
 
+        eprintln!("[sebastian] HTTP POST -> {}", url);
+
         for attempt in 0..MAX_RETRY_COUNT {
             match client
                 .post(&url)
@@ -226,20 +228,22 @@ impl HttpProfile {
                 .send()
                 .await
             {
-                Ok(resp) => match resp.text().await {
+                Ok(resp) => {
+                    eprintln!("[sebastian] HTTP response status: {}", resp.status());
+                    match resp.text().await {
                     Ok(text) => {
                         if let Some(decoded) = self.decode_response(&text) {
                             return Some(decoded);
                         }
-                        utils::print_debug("Failed to decode response");
+                        eprintln!("[sebastian] Failed to decode response");
                         return None;
                     }
                     Err(e) => {
-                        utils::print_debug(&format!("Response read error (attempt {}): {}", attempt, e));
+                        eprintln!("[sebastian] Response read error (attempt {}): {}", attempt, e);
                     }
-                },
+                }},
                 Err(e) => {
-                    utils::print_debug(&format!("HTTP send error (attempt {}): {}", attempt, e));
+                    eprintln!("[sebastian] HTTP send error (attempt {}): {}", attempt, e);
                     profiles::increment_failed_connection("http");
                 }
             }
@@ -347,18 +351,21 @@ impl Profile for HttpProfile {
         self.running.store(true, Ordering::Relaxed);
         self.should_stop.store(false, Ordering::Relaxed);
 
+        eprintln!("[sebastian] HTTP profile start(), exchange_check={}", *self.encrypted_exchange_check.read().unwrap());
+
         // Negotiate key if needed
         if !self.negotiate_key().await {
-            log::error!("HTTP: Key negotiation failed");
+            eprintln!("[sebastian] HTTP: Key negotiation FAILED");
             self.running.store(false, Ordering::Relaxed);
             return;
         }
+        eprintln!("[sebastian] HTTP: Key negotiation OK");
 
         // Checkin
         let checkin_response = match self.checkin().await {
             Some(r) => r,
             None => {
-                log::error!("HTTP: Checkin failed");
+                eprintln!("[sebastian] HTTP: Checkin FAILED (no response)");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }

