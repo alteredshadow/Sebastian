@@ -139,14 +139,15 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
     let bytes = match BASE64.decode(b64_config) {
         Ok(b) => b,
         Err(e) => {
-            utils::print_debug(&format!("Failed to decode {} config: {}", profile_name, e));
+            eprintln!("[sebastian] Failed to base64 decode {} config: {}", profile_name, e);
             return None;
         }
     };
+    eprintln!("[sebastian] {} raw config: {}", profile_name, String::from_utf8_lossy(&bytes));
     match serde_json::from_slice(&bytes) {
         Ok(config) => Some(config),
         Err(e) => {
-            utils::print_debug(&format!("Failed to parse {} config: {}", profile_name, e));
+            eprintln!("[sebastian] Failed to parse {} config: {}", profile_name, e);
             None
         }
     }
