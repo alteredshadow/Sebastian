@@ -31,6 +31,25 @@ RUN ZIG_VERSION=0.13.0 && \
 # Install cargo-zigbuild for macOS cross-compilation
 RUN cargo install cargo-zigbuild
 
+# Create macOS SDK stub .tbd files for cross-compilation
+# These satisfy the linker; real libraries are on the target macOS system
+RUN mkdir -p /opt/macos-stubs/lib \
+    /opt/macos-stubs/framework/CoreFoundation.framework \
+    /opt/macos-stubs/framework/CoreGraphics.framework \
+    /opt/macos-stubs/framework/AppKit.framework \
+    /opt/macos-stubs/framework/Security.framework \
+    /opt/macos-stubs/framework/IOKit.framework \
+    /opt/macos-stubs/framework/IOSurface.framework \
+    /opt/macos-stubs/framework/ColorSync.framework && \
+    for lib in objc objc.A System.B resolv; do \
+        printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: "/usr/lib/lib%s.dylib"\n...\n' "$lib" \
+        > "/opt/macos-stubs/lib/lib${lib}.tbd"; \
+    done && \
+    for fw in CoreFoundation CoreGraphics AppKit Security IOKit IOSurface ColorSync; do \
+        printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: "/System/Library/Frameworks/%s.framework/Versions/A/%s"\n...\n' "$fw" "$fw" \
+        > "/opt/macos-stubs/framework/${fw}.framework/${fw}.tbd"; \
+    done
+
 # Add cross-compilation targets for the Rust agent
 RUN rustup target add x86_64-unknown-linux-gnu \
     && rustup target add aarch64-unknown-linux-gnu \
