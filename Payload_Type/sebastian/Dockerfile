@@ -37,15 +37,16 @@ RUN mkdir -p /opt/macos-stubs/lib \
     /opt/macos-stubs/framework/CoreFoundation.framework \
     /opt/macos-stubs/framework/CoreGraphics.framework \
     /opt/macos-stubs/framework/AppKit.framework \
+    /opt/macos-stubs/framework/Foundation.framework \
     /opt/macos-stubs/framework/Security.framework \
     /opt/macos-stubs/framework/IOKit.framework \
     /opt/macos-stubs/framework/IOSurface.framework \
     /opt/macos-stubs/framework/ColorSync.framework && \
-    for lib in objc objc.A System.B resolv; do \
+    for lib in objc objc.A System System.B resolv iconv c m; do \
         printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: "/usr/lib/lib%s.dylib"\n...\n' "$lib" \
         > "/opt/macos-stubs/lib/lib${lib}.tbd"; \
     done && \
-    for fw in CoreFoundation CoreGraphics AppKit Security IOKit IOSurface ColorSync; do \
+    for fw in CoreFoundation CoreGraphics AppKit Foundation Security IOKit IOSurface ColorSync; do \
         printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: "/System/Library/Frameworks/%s.framework/Versions/A/%s"\n...\n' "$fw" "$fw" \
         > "/opt/macos-stubs/framework/${fw}.framework/${fw}.tbd"; \
     done
