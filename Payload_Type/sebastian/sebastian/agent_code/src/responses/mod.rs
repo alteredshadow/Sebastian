@@ -2,7 +2,6 @@ use crate::structs::{
     Alert, DelegateMessage, InteractiveTaskMessage, MythicMessage, P2PConnectionMessage, Response,
     SocksMsg,
 };
-use crate::utils;
 use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -49,7 +48,7 @@ pub struct ResponseChannels {
 }
 
 /// Buffered responses waiting to be sent to Mythic
-struct ResponseBuffer {
+pub struct ResponseBuffer {
     responses: Vec<Response>,
     delegates: Vec<DelegateMessage>,
     edges: Vec<P2PConnectionMessage>,

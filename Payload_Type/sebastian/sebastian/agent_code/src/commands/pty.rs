@@ -101,7 +101,7 @@ pub async fn execute(task: Task) {
             let _ = nix::sys::signal::kill(child, nix::sys::signal::SIGTERM);
             read_handle.abort();
 
-            let mut done_response = crate::structs::Response {
+            let done_response = crate::structs::Response {
                 task_id: task_id.clone(),
                 completed: true,
                 ..Default::default()

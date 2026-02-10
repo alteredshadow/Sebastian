@@ -6,7 +6,7 @@ pub mod httpx;
 pub mod dynamichttp;
 
 use crate::structs::{
-    CheckInMessage, MythicMessage, MythicMessageResponse, P2PConnectionMessage, Profile,
+    CheckInMessage, MythicMessage, P2PConnectionMessage, Profile,
 };
 use crate::utils;
 use crate::responses;

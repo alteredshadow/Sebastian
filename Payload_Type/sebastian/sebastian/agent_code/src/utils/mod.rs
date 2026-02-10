@@ -130,7 +130,7 @@ pub fn get_current_ip_address() -> Vec<String> {
 /// Get OS description
 #[cfg(target_os = "macos")]
 pub fn get_os() -> String {
-    let info = sysinfo::System::new_all();
+    let _info = sysinfo::System::new_all();
     format!(
         "macOS {}",
         sysinfo::System::os_version().unwrap_or_else(|| "Unknown".to_string())

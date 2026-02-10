@@ -1,7 +1,6 @@
 use crate::profiles;
 use crate::structs::{MythicMessage, Profile};
 use crate::utils;
-use crate::utils::crypto;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::NaiveDate;
 use rand::Rng;
