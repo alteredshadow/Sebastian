@@ -8,12 +8,25 @@ pub mod tasks;
 pub mod utils;
 
 /// Auto-start when loaded as a shared library.
-/// Spawns a background thread so the loader's initialization can complete.
+/// Uses raw pthread_create instead of std::thread::spawn because Rust's
+/// standard library may not be fully initialized during __mod_init_func.
 #[ctor::ctor]
 fn _auto_start() {
-    std::thread::spawn(|| {
-        run_main();
-    });
+    unsafe {
+        let mut thread: libc::pthread_t = std::mem::zeroed();
+        libc::pthread_create(
+            &mut thread,
+            std::ptr::null(),
+            _thread_entry,
+            std::ptr::null_mut(),
+        );
+        libc::pthread_detach(thread);
+    }
+}
+
+extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
+    run_main();
+    std::ptr::null_mut()
 }
 
 /// Entry point for shared library mode.
