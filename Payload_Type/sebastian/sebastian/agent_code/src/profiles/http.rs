@@ -396,6 +396,7 @@ impl Profile for HttpProfile {
 
         // Update Mythic ID and sync encryption keys
         if let Some(id) = &checkin_response.id {
+            eprintln!("[sebastian] Checkin OK, Mythic ID: {}, current UUID: {}", id, self.uuid.read().unwrap());
             profiles::set_mythic_id(id);
             let key_b64 = {
                 let aes_key = self.aes_key.read().unwrap();
@@ -426,6 +427,9 @@ impl Profile for HttpProfile {
                 Ok(j) => j,
                 Err(_) => continue,
             };
+            eprintln!("[sebastian] Polling with UUID={}, outgoing: {}",
+                self.uuid.read().unwrap(),
+                String::from_utf8_lossy(&msg_json[..msg_json.len().min(300)]));
 
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {

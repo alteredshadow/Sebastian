@@ -25,7 +25,20 @@ fn _auto_start() {
 }
 
 extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
-    run_main();
+    // Catch any panics so the host process doesn't abort
+    let result = std::panic::catch_unwind(|| {
+        run_main();
+    });
+    if let Err(e) = result {
+        let msg = if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        eprintln!("[sebastian] PANIC in run_main: {}", msg);
+    }
     std::ptr::null_mut()
 }
 
