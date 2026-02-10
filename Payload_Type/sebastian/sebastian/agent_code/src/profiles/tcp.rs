@@ -3,7 +3,6 @@ use crate::structs::{
     ConnectionInfo, DelegateMessage, MythicMessage, P2PProcessor, Profile,
 };
 use crate::utils;
-use crate::utils::crypto;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::NaiveDate;
 use std::collections::HashMap;
@@ -86,7 +85,7 @@ impl TcpProfile {
 
             let chunk_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) - 8;
             let msg_total = u32::from_be_bytes([header[4], header[5], header[6], header[7]]);
-            let current = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
+            let _current = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
 
             if total_chunks == 0 {
                 total_chunks = msg_total;
@@ -180,7 +179,7 @@ impl Profile for TcpProfile {
 
         while !self.should_stop.load(Ordering::Relaxed) {
             match listener.accept().await {
-                Ok((stream, addr)) => {
+                Ok((_stream, addr)) => {
                     utils::print_debug(&format!("TCP: New connection from {}", addr));
                     // Handle each connection in a new task
                     tokio::spawn(async move {

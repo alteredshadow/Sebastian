@@ -1,8 +1,7 @@
 use crate::structs::{
-    AddInternalConnectionMessage, ConnectionInfo, DelegateMessage, P2PConnectionMessage,
+    AddInternalConnectionMessage, DelegateMessage, P2PConnectionMessage,
     P2PProcessor, RemoveInternalConnectionMessage,
 };
-use crate::utils;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use tokio::sync::mpsc;

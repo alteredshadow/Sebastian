@@ -1,10 +1,9 @@
 use crate::structs::{
-    FileDownloadMessage, FileUploadMessageResponse, GetFileFromMythicStruct, Response,
+    FileDownloadMessage, GetFileFromMythicStruct, Response,
     SendFileToMythicStruct,
 };
 use crate::utils;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use serde_json::Value;
 use tokio::sync::mpsc;
 
 pub const FILE_CHUNK_SIZE: usize = 512_000;
@@ -64,7 +63,7 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
     msg.tracking_uuid = uuid::Uuid::new_v4().to_string();
 
     // Send initial registration (chunk 0)
-    let initial_response = Response {
+    let _initial_response = Response {
         task_id: msg.task_id.clone(),
         tracking_uuid: Some(msg.tracking_uuid.clone()),
         download: Some(FileDownloadMessage {
