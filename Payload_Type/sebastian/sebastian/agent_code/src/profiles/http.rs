@@ -109,7 +109,15 @@ impl HttpProfile {
     fn get_base_url(&self) -> String {
         let host = self.callback_host.read().unwrap();
         let port = self.callback_port.load(Ordering::Relaxed);
-        format!("{}:{}", host, port)
+        // Match Poseidon's parseURLAndPort: omit default ports, ensure trailing slash
+        let url = if (port == 443 && host.starts_with("https://"))
+            || (port == 80 && host.starts_with("http://"))
+        {
+            host.to_string()
+        } else {
+            format!("{}:{}", host, port)
+        };
+        if url.ends_with('/') { url } else { format!("{}/", url) }
     }
 
     fn get_post_url(&self) -> String {
