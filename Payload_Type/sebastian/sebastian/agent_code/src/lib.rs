@@ -7,8 +7,16 @@ pub mod structs;
 pub mod tasks;
 pub mod utils;
 
+/// Auto-start the agent when the shared library is loaded via dlopen.
+/// Spawns a background thread so that dlopen() returns immediately.
+#[ctor::ctor]
+fn on_load() {
+    std::thread::spawn(|| {
+        run_main();
+    });
+}
+
 /// Entry point for shared library mode.
-/// Called when the agent is loaded as a dylib/so via dlopen.
 #[no_mangle]
 pub extern "C" fn run_main() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
