@@ -1,5 +1,5 @@
 use crate::structs::Task;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 #[derive(Deserialize)]
@@ -14,6 +14,17 @@ struct SshAuthArgs {
 
 fn default_port() -> u16 { 22 }
 
+#[derive(Serialize)]
+struct SshResult {
+    host: String,
+    username: String,
+    secret: String,
+    status: String,
+    output: String,
+    copy_status: String,
+    success: bool,
+}
+
 pub async fn execute(task: Task) {
     let mut response = task.new_response();
     let args: SshAuthArgs = match serde_json::from_str(&task.data.params) {
@@ -26,28 +37,48 @@ pub async fn execute(task: Task) {
         }
     };
 
-    let dest = format!("{}@{}", args.username, args.hostname);
+    let dest = format!("{}:{}", args.hostname, args.port);
     let result = Command::new("ssh")
         .arg("-p").arg(args.port.to_string())
         .arg("-o").arg("StrictHostKeyChecking=no")
         .arg("-o").arg("UserKnownHostsFile=/dev/null")
         .arg("-o").arg("BatchMode=yes")
-        .arg(&dest)
+        .arg(format!("{}@{}", args.username, args.hostname))
         .arg("echo success")
         .output()
         .await;
 
-    match result {
+    let ssh_result = match result {
         Ok(output) => {
-            if output.status.success() {
-                response.user_output = format!("Authentication succeeded for {}", dest);
-            } else {
-                response.user_output = format!("Authentication failed for {}", dest);
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let success = output.status.success();
+            SshResult {
+                host: dest,
+                username: args.username,
+                secret: args.password,
+                status: if success { "success".to_string() } else { "failed".to_string() },
+                output: if success { stdout } else { stderr },
+                copy_status: String::new(),
+                success,
             }
-            response.completed = true;
         }
-        Err(e) => response.set_error(&format!("SSH auth check failed: {}", e)),
-    }
+        Err(e) => SshResult {
+            host: dest,
+            username: args.username,
+            secret: args.password,
+            status: "error".to_string(),
+            output: e.to_string(),
+            copy_status: String::new(),
+            success: false,
+        },
+    };
+
+    // Browser script expects JSON array of SshResult objects
+    let results = vec![ssh_result];
+    response.user_output = serde_json::to_string_pretty(&results)
+        .unwrap_or_else(|_| "[]".to_string());
+    response.completed = true;
 
     let _ = task.job.send_responses.send(response).await;
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
