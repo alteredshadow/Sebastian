@@ -65,6 +65,10 @@ pub async fn execute(task: Task) {
         });
     }
 
+    // Set user_output to JSON for the browser script to parse
+    response.user_output = serde_json::to_string_pretty(&processes)
+        .unwrap_or_else(|_| "[]".to_string());
+    // Also set processes for Mythic's process browser
     response.processes = Some(processes);
     response.completed = true;
 

@@ -1,5 +1,6 @@
 use crate::structs::Task;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
@@ -13,6 +14,20 @@ struct PortscanArgs {
 
 fn default_timeout() -> u64 { 500 }
 
+#[derive(Serialize)]
+struct CidrResult {
+    range: String,
+    hosts: Vec<HostResult>,
+}
+
+#[derive(Serialize)]
+struct HostResult {
+    ip: String,
+    hostname: String,
+    pretty_name: String,
+    open_ports: Vec<u16>,
+}
+
 pub async fn execute(task: Task) {
     let mut response = task.new_response();
     let args: PortscanArgs = match serde_json::from_str(&task.data.params) {
@@ -25,8 +40,10 @@ pub async fn execute(task: Task) {
         }
     };
 
-    let mut results = Vec::new();
     let timeout_duration = Duration::from_millis(args.timeout_ms);
+
+    // Group results by host, matching Poseidon's CIDR/host structure
+    let mut host_ports: HashMap<String, Vec<u16>> = HashMap::new();
 
     for host in &args.hosts {
         for port in &args.ports {
@@ -38,16 +55,28 @@ pub async fn execute(task: Task) {
                 .unwrap_or(false);
 
             if is_open {
-                results.push(format!("{}:{} - OPEN", host, port));
+                host_ports.entry(host.clone()).or_default().push(*port);
             }
         }
     }
 
-    response.user_output = if results.is_empty() {
-        "No open ports found".to_string()
-    } else {
-        results.join("\n")
-    };
+    // Build CIDR result structure for browser script
+    let mut hosts = Vec::new();
+    for (host, ports) in &host_ports {
+        hosts.push(HostResult {
+            ip: host.clone(),
+            hostname: host.clone(),
+            pretty_name: host.clone(),
+            open_ports: ports.clone(),
+        });
+    }
+    let results = vec![CidrResult {
+        range: "scan".to_string(),
+        hosts,
+    }];
+
+    response.user_output = serde_json::to_string_pretty(&results)
+        .unwrap_or_else(|_| "[]".to_string());
     response.completed = true;
     let _ = task.job.send_responses.send(response).await;
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
