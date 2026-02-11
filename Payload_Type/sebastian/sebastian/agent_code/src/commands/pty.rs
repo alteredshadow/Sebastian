@@ -1,8 +1,7 @@
 use crate::structs::{InteractiveTaskMessage, InteractiveTaskType, Task};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;
-use std::os::fd::AsRawFd;
-use std::os::unix::io::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Deserialize)]
@@ -13,6 +12,34 @@ struct PtyArgs {
 
 fn default_program() -> String { "/bin/bash".to_string() }
 
+/// Map InteractiveTaskType to the corresponding terminal control byte.
+fn control_byte(msg_type: InteractiveTaskType) -> Option<u8> {
+    match msg_type {
+        InteractiveTaskType::Escape => Some(0x1B),
+        InteractiveTaskType::CtrlA => Some(0x01),
+        InteractiveTaskType::CtrlB => Some(0x02),
+        InteractiveTaskType::CtrlC => Some(0x03),
+        InteractiveTaskType::CtrlD => Some(0x04),
+        InteractiveTaskType::CtrlE => Some(0x05),
+        InteractiveTaskType::CtrlF => Some(0x06),
+        InteractiveTaskType::CtrlG => Some(0x07),
+        InteractiveTaskType::Backspace => Some(0x08),
+        InteractiveTaskType::Tab => Some(0x09),
+        InteractiveTaskType::CtrlK => Some(0x0B),
+        InteractiveTaskType::CtrlL => Some(0x0C),
+        InteractiveTaskType::CtrlN => Some(0x0E),
+        InteractiveTaskType::CtrlP => Some(0x10),
+        InteractiveTaskType::CtrlQ => Some(0x11),
+        InteractiveTaskType::CtrlR => Some(0x12),
+        InteractiveTaskType::CtrlS => Some(0x13),
+        InteractiveTaskType::CtrlU => Some(0x15),
+        InteractiveTaskType::CtrlW => Some(0x17),
+        InteractiveTaskType::CtrlY => Some(0x19),
+        InteractiveTaskType::CtrlZ => Some(0x1A),
+        _ => None,
+    }
+}
+
 pub async fn execute(task: Task) {
     let mut response = task.new_response();
     let args: PtyArgs = match serde_json::from_str(&task.data.params) {
@@ -21,8 +48,7 @@ pub async fn execute(task: Task) {
     };
 
     // Open PTY
-    let pty_result = nix::pty::openpty(None, None);
-    let pty = match pty_result {
+    let pty = match nix::pty::openpty(None, None) {
         Ok(p) => p,
         Err(e) => {
             response.set_error(&format!("Failed to open PTY: {}", e));
@@ -50,26 +76,31 @@ pub async fn execute(task: Task) {
             std::process::exit(1);
         }
         Ok(nix::unistd::ForkResult::Parent { child }) => {
-            let _ = nix::unistd::close(pty.slave.as_raw_fd());
+            // Close slave side in parent
+            drop(pty.slave);
 
             response.user_output = format!("PTY opened with PID {}", child);
             response.completed = false;
             let _ = task.job.send_responses.send(response).await;
 
-            let master_fd = pty.master.as_raw_fd();
-            let mut master = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
+            // Consume OwnedFd and dup for separate read/write
+            let master_fd = pty.master.into_raw_fd();
+            let write_fd = nix::unistd::dup(master_fd).expect("dup master fd");
 
-            // Read from PTY, send to Mythic
+            let mut master_read = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
+            let mut master_write = unsafe { tokio::fs::File::from_raw_fd(write_fd) };
+
             let output_tx = task.job.interactive_task_output_channel.clone();
             let task_id = task.data.task_id.clone();
 
+            // Read from PTY → send to Mythic
             let read_handle = tokio::spawn({
                 let task_id = task_id.clone();
                 let output_tx = output_tx.clone();
                 async move {
                     let mut buf = [0u8; 4096];
                     loop {
-                        match master.read(&mut buf).await {
+                        match master_read.read(&mut buf).await {
                             Ok(0) => break,
                             Ok(n) => {
                                 let _ = output_tx.send(InteractiveTaskMessage {
@@ -84,22 +115,77 @@ pub async fn execute(task: Task) {
                 }
             });
 
-            // Write from Mythic to PTY
+            // Write from Mythic → PTY
             let mut input_rx = task.job.interactive_task_input_channel;
             while let Some(msg) = input_rx.recv().await {
                 if msg.message_type == InteractiveTaskType::Exit {
                     break;
                 }
-                if let Ok(data) = BASE64.decode(&msg.data) {
-                    let mut master_write = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
-                    let _ = master_write.write_all(&data).await;
-                    std::mem::forget(master_write); // Don't close fd
+
+                // Decode the base64 data payload
+                let data = match BASE64.decode(&msg.data) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = output_tx.send(InteractiveTaskMessage {
+                            task_id: task_id.clone(),
+                            data: BASE64.encode(format!("base64 decode error: {}\n", e).as_bytes()),
+                            message_type: InteractiveTaskType::Error,
+                        }).await;
+                        continue;
+                    }
+                };
+
+                let write_result = match msg.message_type {
+                    InteractiveTaskType::Input => {
+                        master_write.write_all(&data).await
+                    }
+                    InteractiveTaskType::Escape => {
+                        // Send escape byte first, then any data
+                        let mut r = master_write.write_all(&[0x1B]).await;
+                        if r.is_ok() && !data.is_empty() {
+                            r = master_write.write_all(&data).await;
+                        }
+                        r
+                    }
+                    InteractiveTaskType::Tab => {
+                        // Write any prefix data first, then tab byte
+                        let mut r = Ok(());
+                        if !data.is_empty() {
+                            r = master_write.write_all(&data).await;
+                        }
+                        if r.is_ok() {
+                            r = master_write.write_all(&[0x09]).await;
+                        }
+                        r
+                    }
+                    other => {
+                        // All other control characters
+                        if let Some(byte) = control_byte(other) {
+                            master_write.write_all(&[byte]).await
+                        } else {
+                            // Unknown type, write data as-is
+                            if !data.is_empty() {
+                                master_write.write_all(&data).await
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    }
+                };
+
+                if let Err(e) = write_result {
+                    let _ = output_tx.send(InteractiveTaskMessage {
+                        task_id: task_id.clone(),
+                        data: BASE64.encode(format!("write error: {}\n", e).as_bytes()),
+                        message_type: InteractiveTaskType::Error,
+                    }).await;
                 }
             }
 
             // Cleanup
             let _ = nix::sys::signal::kill(child, nix::sys::signal::SIGTERM);
             read_handle.abort();
+            drop(master_write);
 
             let done_response = crate::structs::Response {
                 task_id: task_id.clone(),
