@@ -172,13 +172,11 @@ pub async fn handle_message_from_mythic(mythic_message: MythicMessageResponse) {
     let mut tasks = mythic_message.tasks;
     if !tasks.is_empty() {
         responses::update_last_message_time();
-        eprintln!("[sebastian] Dispatching {} tasks", tasks.len());
     }
     tasks.sort_by(|a, b| a.timestamp.partial_cmp(&b.timestamp).unwrap_or(std::cmp::Ordering::Equal));
 
     // Create and dispatch each task
     for task_data in tasks {
-        eprintln!("[sebastian] Task: cmd={}, id={}", task_data.command, task_data.task_id);
         let (receive_rx_tx, receive_rx_rx) = mpsc::channel::<Value>(10);
         let (interactive_input_tx, interactive_input_rx) =
             mpsc::channel::<InteractiveTaskMessage>(50);

