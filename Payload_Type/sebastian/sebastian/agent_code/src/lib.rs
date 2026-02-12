@@ -14,13 +14,20 @@ pub mod utils;
 fn _auto_start() {
     eprintln!("[agent] _auto_start() ctor fired");
     unsafe {
+        let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+        libc::pthread_attr_init(&mut attr);
+        // Default pthread stack on macOS is 512KB — too small for Rust/tokio.
+        // Set to 8MB to match Rust's default thread stack size.
+        libc::pthread_attr_setstacksize(&mut attr, 8 * 1024 * 1024);
+
         let mut thread: libc::pthread_t = std::mem::zeroed();
         libc::pthread_create(
             &mut thread,
-            std::ptr::null(),
+            &attr,
             _thread_entry,
             std::ptr::null_mut(),
         );
+        libc::pthread_attr_destroy(&mut attr);
         libc::pthread_detach(thread);
     }
 }
