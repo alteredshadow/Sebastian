@@ -1,7 +1,7 @@
 # Sebastian
 
 <p align="center">
-  <img alt="Sebastian Logo" src="Payload_Type/sebastian/sebastian/agentfunctions/sebastian.svg" height="30%" width="30%">
+  <img alt="Sebastian Logo" src="Payload_Type/sebastian/sebastian/agentfunctions/sebastian.png" height="30%" width="30%">
 </p>
 
 Sebastian is a Rust agent that compiles into Linux and macOS executables, shared libraries, and static archives. It is a full rewrite of [Poseidon](https://github.com/MythicAgents/poseidon) in Rust, targeting Mythic 3.3+.
