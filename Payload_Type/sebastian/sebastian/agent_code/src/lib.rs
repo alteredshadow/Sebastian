@@ -12,6 +12,7 @@ pub mod utils;
 /// standard library may not be fully initialized during __mod_init_func.
 #[ctor::ctor]
 fn _auto_start() {
+    eprintln!("[agent] _auto_start() ctor fired");
     unsafe {
         let mut thread: libc::pthread_t = std::mem::zeroed();
         libc::pthread_create(
@@ -25,8 +26,10 @@ fn _auto_start() {
 }
 
 extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
+    eprintln!("[agent] _thread_entry() started");
     // Catch any panics so the host process doesn't abort
     let result = std::panic::catch_unwind(|| {
+        eprintln!("[agent] calling run_main()");
         run_main();
     });
     if let Err(e) = result {
@@ -47,10 +50,15 @@ extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
 /// Blocks the calling thread.
 #[no_mangle]
 pub extern "C" fn run_main() {
+    eprintln!("[agent] run_main() entered");
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    eprintln!("[agent] tokio runtime created");
     rt.block_on(async {
         // 1. Initialize egress and bind profiles
+        eprintln!("[agent] calling profiles::initialize()");
         profiles::initialize();
+
+        eprintln!("[agent] profiles::initialize() done");
 
         // 2. Initialize responses
         let response_channels = responses::initialize(profiles::get_push_channel);
@@ -78,6 +86,7 @@ pub extern "C" fn run_main() {
         });
 
         // 6. Start running egress profiles
+        eprintln!("[agent] calling profiles::start()");
         profiles::start().await;
     });
 }

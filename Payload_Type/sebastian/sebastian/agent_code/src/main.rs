@@ -8,6 +8,7 @@ mod tasks;
 mod utils;
 
 fn main() {
+    eprintln!("[agent] main() entered");
     env_logger::init();
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(async {
@@ -16,6 +17,8 @@ fn main() {
 }
 
 async fn run_agent() {
+    eprintln!("[agent] run_agent() entered");
+
     // 1. Initialize egress and bind profiles
     profiles::initialize();
 
