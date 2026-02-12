@@ -248,23 +248,35 @@ pub async fn start() {
 
     // Start first matching egress profile
     let current_id = CURRENT_CONNECTION_ID.load(std::sync::atomic::Ordering::Relaxed) as usize;
-    eprintln!("[agent] Looking for egress profile at index {}", current_id);
+    use std::io::Write;
+    let _ = write!(std::io::stderr(), "[agent] Looking for egress at idx {}\n", current_id);
+    let _ = std::io::stderr().flush();
     let mut started_egress = false;
     for (i, egress_c2) in egress_order.iter().enumerate() {
-        eprintln!("[agent]   egress[{}] = {:?}, is current={}", i, egress_c2, i == current_id);
+        let _ = write!(std::io::stderr(), "[agent]   egress[{}] = {:?}, is current={}\n", i, egress_c2, i == current_id);
+        let _ = std::io::stderr().flush();
         if i == current_id {
             if let Some(profile) = profiles.get(egress_c2) {
+                let _ = write!(std::io::stderr(), "[agent]   got profile, is_p2p={}\n", profile.is_p2p());
+                let _ = std::io::stderr().flush();
                 if !profile.is_p2p() {
-                    eprintln!("[agent] Starting egress profile: {}", egress_c2);
+                    let _ = write!(std::io::stderr(), "[agent]   cloning arc...\n");
+                    let _ = std::io::stderr().flush();
                     started_egress = true;
                     let p = profile.clone();
+                    let _ = write!(std::io::stderr(), "[agent]   spawning task...\n");
+                    let _ = std::io::stderr().flush();
                     tokio::spawn(async move {
+                        let _ = write!(std::io::stderr(), "[agent]   spawned task running\n");
+                        let _ = std::io::stderr().flush();
                         p.start().await;
                     });
+                    let _ = write!(std::io::stderr(), "[agent]   spawn returned\n");
+                    let _ = std::io::stderr().flush();
                     break;
                 }
             } else {
-                eprintln!("[agent] Profile {:?} in egress_order but not in registered profiles!", egress_c2);
+                eprintln!("[agent] Profile {:?} not in registered profiles!", egress_c2);
             }
         }
     }
@@ -272,20 +284,20 @@ pub async fn start() {
         eprintln!("[agent] WARNING: No egress profile was started!");
     }
 
-    // Start all P2P profiles
-    for (name, profile) in profiles.iter() {
-        if profile.is_p2p() {
-            utils::print_debug(&format!("Starting P2P: {}", name));
-            let p = profile.clone();
-            tokio::spawn(async move {
-                p.start().await;
-            });
-        }
-    }
+    let _ = write!(std::io::stderr(), "[agent] dropping locks...\n");
+    let _ = std::io::stderr().flush();
+
+    // Start all P2P profiles (skipping for now - none registered)
     drop(profiles);
+    let _ = write!(std::io::stderr(), "[agent] dropped profiles lock\n");
+    let _ = std::io::stderr().flush();
     drop(egress_order);
+    let _ = write!(std::io::stderr(), "[agent] dropped egress_order lock\n");
+    let _ = std::io::stderr().flush();
 
     // Wait forever
+    let _ = write!(std::io::stderr(), "[agent] waiting forever\n");
+    let _ = std::io::stderr().flush();
     let (_tx, mut rx) = mpsc::channel::<bool>(1);
     rx.recv().await;
 }
