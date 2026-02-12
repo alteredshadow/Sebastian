@@ -402,12 +402,20 @@ impl Profile for HttpProfile {
             }
         }
 
-        eprintln!("[agent] Checkin OK, entering poll loop with UUID={}", self.uuid.read().unwrap());
+        let poll_uuid = self.uuid.read().unwrap().clone();
+        let killdate_val = *self.killdate.read().unwrap();
+        let interval_val = self.interval.load(Ordering::Relaxed);
+        eprintln!("[agent] Checkin OK, UUID={}, killdate={}, interval={}s", poll_uuid, killdate_val, interval_val);
 
         // Main polling loop
+        let should_stop = self.should_stop.load(Ordering::Relaxed);
+        let past_kill = self.past_killdate();
+        eprintln!("[agent] Loop check: should_stop={}, past_killdate={}", should_stop, past_kill);
+
         while !self.should_stop.load(Ordering::Relaxed) && !self.past_killdate() {
             // Sleep
             let sleep_time = self.get_sleep_time();
+            eprintln!("[agent] Sleeping {}s", sleep_time);
             if sleep_time > 0 {
                 tokio::time::sleep(Duration::from_secs(sleep_time as u64)).await;
             }
@@ -420,8 +428,12 @@ impl Profile for HttpProfile {
             let msg = crate::responses::drain_poll_buffer();
             let msg_json = match serde_json::to_vec(&msg) {
                 Ok(j) => j,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[agent] Failed to serialize poll msg: {}", e);
+                    continue;
+                }
             };
+            eprintln!("[agent] Sending poll...");
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {
                 let preview = String::from_utf8_lossy(
@@ -441,9 +453,12 @@ impl Profile for HttpProfile {
                     }
                 }
             } else {
-                eprintln!("[agent] Poll: no response (send_message returned None)");
+                eprintln!("[agent] Poll: send_message returned None");
             }
         }
+
+        eprintln!("[agent] Poll loop exited: should_stop={}, past_killdate={}",
+            self.should_stop.load(Ordering::Relaxed), self.past_killdate());
 
         self.running.store(false, Ordering::Relaxed);
         utils::print_debug("HTTP: Profile stopped");
