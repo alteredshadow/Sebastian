@@ -12,12 +12,9 @@ pub mod utils;
 /// standard library may not be fully initialized during __mod_init_func.
 #[ctor::ctor]
 fn _auto_start() {
-    eprintln!("[agent] _auto_start() ctor fired");
     unsafe {
         let mut attr: libc::pthread_attr_t = std::mem::zeroed();
         libc::pthread_attr_init(&mut attr);
-        // Default pthread stack on macOS is 512KB — too small for Rust/tokio.
-        // Set to 8MB to match Rust's default thread stack size.
         libc::pthread_attr_setstacksize(&mut attr, 8 * 1024 * 1024);
 
         let mut thread: libc::pthread_t = std::mem::zeroed();
@@ -33,21 +30,12 @@ fn _auto_start() {
 }
 
 extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
-    eprintln!("[agent] _thread_entry() started");
     // Catch any panics so the host process doesn't abort
     let result = std::panic::catch_unwind(|| {
-        eprintln!("[agent] calling run_main()");
         run_main();
     });
-    if let Err(e) = result {
-        let msg = if let Some(s) = e.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = e.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown panic".to_string()
-        };
-        eprintln!("[agent] PANIC in run_main: {}", msg);
+    if let Err(_) = result {
+        // panic caught, suppress
     }
     std::ptr::null_mut()
 }
@@ -57,15 +45,10 @@ extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
 /// Blocks the calling thread.
 #[no_mangle]
 pub extern "C" fn run_main() {
-    eprintln!("[agent] run_main() entered");
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    eprintln!("[agent] tokio runtime created");
     rt.block_on(async {
         // 1. Initialize egress and bind profiles
-        eprintln!("[agent] calling profiles::initialize()");
         profiles::initialize();
-
-        eprintln!("[agent] profiles::initialize() done");
 
         // 2. Initialize responses
         let response_channels = responses::initialize(profiles::get_push_channel);
@@ -93,7 +76,6 @@ pub extern "C" fn run_main() {
         });
 
         // 6. Start running egress profiles
-        eprintln!("[agent] calling profiles::start()");
         profiles::start().await;
     });
 }

