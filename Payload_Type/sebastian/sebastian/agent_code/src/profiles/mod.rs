@@ -97,7 +97,7 @@ pub fn initialize() {
 
     let order: Vec<String> = match serde_json::from_slice(&egress_order_bytes) {
         Ok(o) => o,
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     };
