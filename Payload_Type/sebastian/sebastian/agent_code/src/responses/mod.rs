@@ -359,8 +359,8 @@ pub async fn send_exit_message(get_push_channel: fn() -> Option<mpsc::Sender<Myt
         let _ = tx.send(exit_msg).await;
         crate::utils::print_debug("Exit message sent via push channel");
     } else {
-        // Buffer it for polling profiles
-        buffer_message(exit_msg).await;
+        // Buffer it for polling profiles (buffer_message is synchronous)
+        buffer_message(exit_msg);
         crate::utils::print_debug("Exit message buffered for next poll");
     }
 }
