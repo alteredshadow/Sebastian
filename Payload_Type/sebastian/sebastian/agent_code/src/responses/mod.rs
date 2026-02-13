@@ -348,3 +348,19 @@ async fn listen_for_rpfwd_traffic_to_mythic(
         try_push_or_buffer(msg, get_push_channel).await;
     }
 }
+
+/// Send an exit message to Mythic to immediately mark the callback as dead
+/// This should be called before the agent terminates
+pub async fn send_exit_message(get_push_channel: fn() -> Option<mpsc::Sender<MythicMessage>>) {
+    let exit_msg = MythicMessage::new_exit();
+
+    // Try to send via push channel if available
+    if let Some(tx) = get_push_channel() {
+        let _ = tx.send(exit_msg).await;
+        crate::utils::print_debug("Exit message sent via push channel");
+    } else {
+        // Buffer it for polling profiles
+        buffer_message(exit_msg).await;
+        crate::utils::print_debug("Exit message buffered for next poll");
+    }
+}
