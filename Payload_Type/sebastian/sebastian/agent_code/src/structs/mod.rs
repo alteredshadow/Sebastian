@@ -137,6 +137,20 @@ impl MythicMessage {
             alerts: None,
         }
     }
+
+    pub fn new_exit() -> Self {
+        Self {
+            action: "exit".to_string(),
+            tasking_size: -1,
+            delegates: None,
+            responses: None,
+            socks: None,
+            rpfwds: None,
+            edges: None,
+            interactive_tasks: None,
+            alerts: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

