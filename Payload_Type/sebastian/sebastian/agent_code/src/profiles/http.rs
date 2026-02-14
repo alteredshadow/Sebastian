@@ -233,7 +233,12 @@ impl HttpProfile {
         let headers = self.build_headers();
         let encoded = self.encode_message(data);
 
+        utils::print_debug(&format!("HTTP: send_message to {} ({} bytes)", url, data.len()));
+
         for attempt in 0..MAX_RETRY_COUNT {
+            utils::print_debug(&format!("HTTP: Attempt {} of {}", attempt + 1, MAX_RETRY_COUNT));
+            utils::print_debug("HTTP: Sending POST request...");
+
             match client
                 .post(&url)
                 .headers(headers.clone())
@@ -242,29 +247,36 @@ impl HttpProfile {
                 .await
             {
                 Ok(resp) => {
+                    utils::print_debug(&format!("HTTP: Received response with status: {}", resp.status()));
                     match resp.text().await {
                         Ok(text) => {
+                            utils::print_debug(&format!("HTTP: Response text length: {}", text.len()));
                             if let Some(decoded) = self.decode_response(&text) {
+                                utils::print_debug("HTTP: Successfully decoded response");
                                 return Some(decoded);
                             }
+                            utils::print_debug("HTTP: Failed to decode response");
                             return None;
                         }
-                        Err(_e) => {}
+                        Err(e) => {
+                            utils::print_debug(&format!("HTTP: Failed to read response text: {:?}", e));
+                        }
                     }
                 }
-                Err(_e) => {
+                Err(e) => {
+                    utils::print_debug(&format!("HTTP: Request failed: {:?}", e));
                     profiles::increment_failed_connection("http");
                 }
             }
 
             if attempt < MAX_RETRY_COUNT - 1 {
-                tokio::time::sleep(Duration::from_secs(
-                    self.get_sleep_time().max(1) as u64,
-                ))
-                .await;
+                let sleep_time = self.get_sleep_time().max(1) as u64;
+                utils::print_debug(&format!("HTTP: Sleeping {} seconds before retry", sleep_time));
+                tokio::time::sleep(Duration::from_secs(sleep_time)).await;
             }
         }
 
+        utils::print_debug("HTTP: All retry attempts exhausted");
         None
     }
 
