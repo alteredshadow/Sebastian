@@ -132,8 +132,8 @@ impl HttpProfile {
             .danger_accept_invalid_certs(true)
             .no_proxy()
             .timeout(Duration::from_secs(30))
-            .pool_max_idle_per_host(0) // Disable connection pooling to avoid reuse issues in dylib
-            .tcp_keepalive(Some(Duration::from_secs(5)));
+            .tcp_nodelay(true) // Disable Nagle's algorithm for lower latency
+            .pool_idle_timeout(Some(Duration::from_secs(10)));
 
         let proxy_host = self.proxy_host.read().unwrap();
         if !proxy_host.is_empty() {
@@ -352,6 +352,12 @@ impl HttpProfile {
             checkin_msg.uuid, checkin_msg.host, checkin_msg.user));
         let checkin_json = serde_json::to_vec(&checkin_msg).ok()?;
         utils::print_debug(&format!("HTTP: Checkin JSON size: {} bytes", checkin_json.len()));
+
+        // Dump the actual JSON for debugging
+        if let Ok(json_str) = std::str::from_utf8(&checkin_json) {
+            utils::print_debug(&format!("HTTP: Checkin JSON: {}", json_str));
+        }
+
         let response_bytes = self.send_message(&checkin_json).await?;
         utils::print_debug("HTTP: Checkin response received, parsing");
         serde_json::from_slice(&response_bytes).ok()
