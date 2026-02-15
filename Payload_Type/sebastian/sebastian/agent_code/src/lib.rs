@@ -88,7 +88,13 @@ pub extern "C" fn run_main() {
         libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
     }
 
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    // Try building runtime with explicit configuration for dylib context
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("sebastian-worker")
+        .worker_threads(4)
+        .build()
+        .expect("Failed to create tokio runtime");
 
     unsafe {
         let msg = b"[dylib] Tokio runtime created, entering block_on\n";
