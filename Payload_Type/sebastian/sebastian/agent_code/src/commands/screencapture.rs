@@ -145,8 +145,23 @@ pub async fn execute(task: Task) {
                     file_transfers: task.job.file_transfers.clone(),
                 };
                 if task.job.send_file_to_mythic.send(msg).await.is_ok() {
-                    let _ = finished_rx.recv().await;
-                    files_sent += 1;
+                    match finished_rx.recv().await {
+                        Some(1) => {
+                            files_sent += 1;
+                        }
+                        Some(status) => {
+                            response.user_output = format!(
+                                "File transfer failed for display {} (status={})", i, status
+                            );
+                            let _ = task.job.send_responses.send(response.clone()).await;
+                        }
+                        None => {
+                            response.user_output = format!(
+                                "File transfer channel closed for display {}", i
+                            );
+                            let _ = task.job.send_responses.send(response.clone()).await;
+                        }
+                    }
                 }
             }
             Err(e) => {

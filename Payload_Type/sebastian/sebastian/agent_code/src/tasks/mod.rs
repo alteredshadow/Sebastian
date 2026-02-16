@@ -97,6 +97,10 @@ pub async fn handle_message_from_mythic(mythic_message: MythicMessageResponse) {
     // Handle responses from Mythic (route to running tasks)
     if !mythic_message.responses.is_empty() {
         responses::update_last_message_time();
+        utils::print_debug(&format!(
+            "Routing {} response(s) from Mythic",
+            mythic_message.responses.len()
+        ));
     }
     for r in &mythic_message.responses {
         if let Some(Value::String(task_id)) = r.get("task_id") {
@@ -112,13 +116,41 @@ pub async fn handle_message_from_mythic(mythic_message: MythicMessageResponse) {
                 if let Some(Value::String(tracking_uuid)) = r.get("tracking_uuid") {
                     let file_transfers = task_info.file_transfers.lock().unwrap();
                     if let Some(ft_tx) = file_transfers.get(tracking_uuid) {
-                        let _ = ft_tx.try_send(raw);
+                        utils::print_debug(&format!(
+                            "Routing file transfer response for task {} tracking {}",
+                            task_id, tracking_uuid
+                        ));
+                        match ft_tx.try_send(raw) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                utils::print_debug(&format!(
+                                    "Failed to route file transfer response: {}",
+                                    e
+                                ));
+                            }
+                        }
                         continue;
+                    } else {
+                        utils::print_debug(&format!(
+                            "No file transfer handler for tracking_uuid {} (map has {} entries)",
+                            tracking_uuid,
+                            file_transfers.len()
+                        ));
                     }
                 }
 
                 let _ = task_info.receive_responses_tx.try_send(raw);
+            } else {
+                utils::print_debug(&format!(
+                    "Response for unknown task_id: {}",
+                    task_id
+                ));
             }
+        } else {
+            utils::print_debug(&format!(
+                "Response without task_id: {:?}",
+                r.keys().collect::<Vec<_>>()
+            ));
         }
     }
 

