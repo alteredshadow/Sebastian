@@ -1,4 +1,5 @@
 use crate::structs::Task;
+use crate::utils;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -28,10 +29,14 @@ pub async fn execute(task: Task) {
         }
     };
 
+    utils::print_debug(&format!("setenv: setting {}={}", args.name, args.value));
     std::env::set_var(&args.name, &args.value);
     response.user_output = format!("Set {}={}", args.name, args.value);
     response.completed = true;
+    utils::print_debug(&format!("setenv: sending response for task {}", task.data.task_id));
 
     let _ = task.job.send_responses.send(response).await;
+    utils::print_debug("setenv: response sent, removing task");
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
+    utils::print_debug("setenv: done");
 }
