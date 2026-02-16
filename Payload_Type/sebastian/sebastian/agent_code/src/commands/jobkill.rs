@@ -9,12 +9,7 @@ pub async fn execute(task: Task) {
     let mut response = task.new_response();
     let args: JobkillArgs = match serde_json::from_str(&task.data.params) {
         Ok(a) => a,
-        Err(e) => {
-            response.set_error(&format!("Failed to parse: {}", e));
-            let _ = task.job.send_responses.send(response).await;
-            let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
-            return;
-        }
+        Err(_) => JobkillArgs { id: task.data.params.trim().to_string() },
     };
 
     if tasks::kill_task(&args.id) {

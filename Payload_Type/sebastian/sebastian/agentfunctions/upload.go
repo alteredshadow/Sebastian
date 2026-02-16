@@ -2,6 +2,7 @@ package agentfunctions
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	agentstructs "github.com/MythicMeta/MythicContainer/agent_structs"
@@ -103,27 +104,10 @@ func init() {
 			if len(parts) == 0 || parts[0] == "" {
 				return fmt.Errorf("usage: upload <filename> [remote_path]")
 			}
-			args.AddArg(agentstructs.CommandParameter{
-				Name:          "existingFile",
-				DefaultValue:  parts[0],
-				ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_CHOOSE_ONE,
-				ParameterGroupInformation: []agentstructs.ParameterGroupInfo{
-					{
-						GroupName: "existingFile",
-					},
-				},
-			})
+			args.SetManualParameterGroup("existingFile")
+			args.SetArgValue("existingFile", parts[0])
 			if len(parts) > 1 && parts[1] != "" {
-				args.AddArg(agentstructs.CommandParameter{
-					Name:          "remote_path",
-					DefaultValue:  parts[1],
-					ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_STRING,
-					ParameterGroupInformation: []agentstructs.ParameterGroupInfo{
-						{
-							GroupName: "existingFile",
-						},
-					},
-				})
+				args.SetArgValue("remote_path", parts[1])
 			}
 			return nil
 		},
@@ -151,20 +135,30 @@ func init() {
 					response.Error = err.Error()
 					return response
 				}
-				search, err = mythicrpc.SendMythicRPCFileSearch(mythicrpc.MythicRPCFileSearchMessage{
-					AgentFileID: fileID,
-				})
+				// If file_id looks like a path instead of a UUID, search by filename
+				if strings.Contains(fileID, "/") || strings.Contains(fileID, "\\") {
+					search, err = mythicrpc.SendMythicRPCFileSearch(mythicrpc.MythicRPCFileSearchMessage{
+						Filename:   filepath.Base(fileID),
+						TaskID:     taskData.Task.ID,
+						MaxResults: 1,
+					})
+				} else {
+					search, err = mythicrpc.SendMythicRPCFileSearch(mythicrpc.MythicRPCFileSearchMessage{
+						AgentFileID: fileID,
+					})
+				}
 				taskData.Args.RemoveArg("file_id")
 			} else {
 				filename, err := taskData.Args.GetStringArg("existingFile")
 				if err != nil {
-					logging.LogError(err, "Failed to get file_id")
+					logging.LogError(err, "Failed to get existingFile")
 					response.Success = false
 					response.Error = err.Error()
 					return response
 				}
+				// Search by basename in case user provided a full path
 				search, err = mythicrpc.SendMythicRPCFileSearch(mythicrpc.MythicRPCFileSearchMessage{
-					Filename:   filename,
+					Filename:   filepath.Base(filename),
 					TaskID:     taskData.Task.ID,
 					MaxResults: 1,
 				})
