@@ -157,7 +157,7 @@ pub async fn dispatch(task: Task) {
         #[cfg(target_os = "macos")]
         "persist_loginitem" => persist_loginitem::execute(task).await,
         #[cfg(target_os = "macos")]
-        "xpc_service" | "xpc_submit" | "xpc_status" | "xpc_start" | "xpc_stop"
+        "xpc" | "xpc_service" | "xpc_submit" | "xpc_status" | "xpc_start" | "xpc_stop"
         | "xpc_remove" => xpc::execute(task).await,
         #[cfg(target_os = "macos")]
         "libinject" => libinject::execute(task).await,
