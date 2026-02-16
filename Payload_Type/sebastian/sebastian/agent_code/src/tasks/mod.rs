@@ -270,10 +270,29 @@ async fn listen_for_new_task(mut rx: mpsc::Receiver<Task>) {
     while let Some(task) = rx.recv().await {
         let command = task.data.command.clone();
         let task_id = task.data.task_id.clone();
+        let send_responses = task.job.send_responses.clone();
+        let remove_task = task.remove_running_task.clone();
         utils::print_debug(&format!("Dispatching command: {} (task: {})", command, task_id));
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             commands::dispatch(task).await;
+        });
+
+        // Monitor the task for panics - if it panics, send an error response
+        tokio::spawn(async move {
+            if let Err(e) = handle.await {
+                utils::print_debug(&format!(
+                    "PANIC in command '{}' (task {}): {:?}",
+                    command, task_id, e
+                ));
+                let mut response = Response {
+                    task_id: task_id.clone(),
+                    ..Response::default()
+                };
+                response.set_error(&format!("Internal agent error in '{}': {:?}", command, e));
+                let _ = send_responses.send(response).await;
+                let _ = remove_task.send(task_id).await;
+            }
         });
     }
 }
