@@ -141,7 +141,8 @@ pub async fn execute(task: Task) {
                     data: Some(png_data),
                     finished_transfer: finished_tx,
                     tracking_uuid: String::new(),
-                    file_transfer_response: None,
+                    send_responses: task.job.send_responses.clone(),
+                    file_transfers: task.job.file_transfers.clone(),
                 };
                 if task.job.send_file_to_mythic.send(msg).await.is_ok() {
                     let _ = finished_rx.recv().await;

@@ -22,7 +22,7 @@ lazy_static::lazy_static! {
 struct RunningTaskInfo {
     pub task_data: TaskData,
     pub receive_responses_tx: mpsc::Sender<Value>,
-    pub file_transfers: std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>,
+    pub file_transfers: std::sync::Arc<std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     pub interactive_task_input_tx: mpsc::Sender<InteractiveTaskMessage>,
     pub stop: std::sync::Arc<AtomicBool>,
 }
@@ -183,10 +183,13 @@ pub async fn handle_message_from_mythic(mythic_message: MythicMessageResponse) {
         let stop = std::sync::Arc::new(AtomicBool::new(false));
 
         // Store task info for response routing
+        let file_transfers =
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::<String, mpsc::Sender<Value>>::new()));
+
         let task_info = RunningTaskInfo {
             task_data: task_data.clone(),
             receive_responses_tx: receive_rx_tx.clone(),
-            file_transfers: std::sync::Mutex::new(HashMap::new()),
+            file_transfers: file_transfers.clone(),
             interactive_task_input_tx: interactive_input_tx.clone(),
             stop: stop.clone(),
         };
@@ -202,7 +205,7 @@ pub async fn handle_message_from_mythic(mythic_message: MythicMessageResponse) {
             send_responses: channels.new_response_tx.clone(),
             send_file_to_mythic: channels.send_file_to_mythic_tx.clone(),
             get_file_from_mythic: channels.get_file_from_mythic_tx.clone(),
-            file_transfers: std::sync::Mutex::new(HashMap::new()),
+            file_transfers,
             save_file_func: utils::save_to_memory,
             remove_saved_file: utils::remove_from_memory,
             get_saved_file: utils::get_from_memory,
