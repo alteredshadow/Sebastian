@@ -2,11 +2,16 @@ use crate::structs::{
     Alert, DelegateMessage, InteractiveTaskMessage, MythicMessage, P2PConnectionMessage, Response,
     SocksMsg,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
 pub const USER_OUTPUT_CHUNK_SIZE: usize = 512_000;
+
+/// Flag set when the agent is exiting. Causes the next drain_poll_buffer call
+/// to produce a message with action="exit" so Mythic marks the callback dead.
+static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 lazy_static::lazy_static! {
     /// Timestamp of last real message from Mythic (for backoff logic)
@@ -147,9 +152,14 @@ pub fn initialize(
 
 /// Drain the global poll buffer and return a MythicMessage with all pending data.
 /// Called by poll-based profiles (HTTP) each iteration of their polling loop.
+/// If an exit has been requested, the returned message will have action="exit".
 pub fn drain_poll_buffer() -> MythicMessage {
     let mut buf = POLL_BUFFER.lock().unwrap();
-    create_mythic_poll_message(&mut buf)
+    let mut msg = create_mythic_poll_message(&mut buf);
+    if EXIT_REQUESTED.load(Ordering::Relaxed) {
+        msg.action = "exit".to_string();
+    }
+    msg
 }
 
 /// Store a MythicMessage's contents into the global poll buffer.
@@ -349,18 +359,18 @@ async fn listen_for_rpfwd_traffic_to_mythic(
     }
 }
 
-/// Send an exit message to Mythic to immediately mark the callback as dead
-/// This should be called before the agent terminates
+/// Send an exit message to Mythic to immediately mark the callback as dead.
+/// For push-based profiles (WebSocket), sends immediately.
+/// For poll-based profiles (HTTP), sets a flag so the next poll uses action="exit".
 pub async fn send_exit_message(get_push_channel: fn() -> Option<mpsc::Sender<MythicMessage>>) {
-    let exit_msg = MythicMessage::new_exit();
-
     // Try to send via push channel if available
     if let Some(tx) = get_push_channel() {
+        let exit_msg = MythicMessage::new_exit();
         let _ = tx.send(exit_msg).await;
         crate::utils::print_debug("Exit message sent via push channel");
     } else {
-        // Buffer it for polling profiles (buffer_message is synchronous)
-        buffer_message(exit_msg);
-        crate::utils::print_debug("Exit message buffered for next poll");
+        // Poll-based profile: set flag so next drain_poll_buffer produces action="exit"
+        EXIT_REQUESTED.store(true, Ordering::Relaxed);
+        crate::utils::print_debug("Exit flag set for next poll cycle");
     }
 }
