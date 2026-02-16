@@ -236,7 +236,7 @@ pub struct Job {
     pub send_responses: mpsc::Sender<Response>,
     pub send_file_to_mythic: mpsc::Sender<SendFileToMythicStruct>,
     pub get_file_from_mythic: mpsc::Sender<GetFileFromMythicStruct>,
-    pub file_transfers: std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>,
+    pub file_transfers: std::sync::Arc<std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     pub save_file_func: fn(file_uuid: &str, data: &[u8]),
     pub remove_saved_file: fn(file_uuid: &str),
     pub get_saved_file: fn(file_uuid: &str) -> Option<Vec<u8>>,
@@ -468,7 +468,8 @@ pub struct SendFileToMythicStruct {
     pub data: Option<Vec<u8>>,
     pub finished_transfer: mpsc::Sender<i32>,
     pub tracking_uuid: String,
-    pub file_transfer_response: Option<mpsc::Sender<Value>>,
+    pub send_responses: mpsc::Sender<Response>,
+    pub file_transfers: std::sync::Arc<std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>>,
 }
 
 pub struct GetFileFromMythicStruct {
@@ -478,7 +479,8 @@ pub struct GetFileFromMythicStruct {
     pub send_user_status_updates: bool,
     pub received_chunk_channel: mpsc::Sender<Vec<u8>>,
     pub tracking_uuid: String,
-    pub file_transfer_response: Option<mpsc::Sender<Value>>,
+    pub send_responses: mpsc::Sender<Response>,
+    pub file_transfers: std::sync::Arc<std::sync::Mutex<HashMap<String, mpsc::Sender<Value>>>>,
 }
 
 // ============================================================================

@@ -28,7 +28,8 @@ pub async fn execute(task: Task) {
         send_user_status_updates: false,
         received_chunk_channel: chunk_tx,
         tracking_uuid: String::new(),
-        file_transfer_response: None,
+        send_responses: task.job.send_responses.clone(),
+        file_transfers: task.job.file_transfers.clone(),
     };
 
     if task.job.get_file_from_mythic.send(get_file).await.is_err() {
