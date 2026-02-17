@@ -42,8 +42,7 @@ pub async fn execute(task: Task) {
     match result {
         Ok(Ok(processes)) => {
             utils::print_debug(&format!("ps: collected {} processes", processes.len()));
-            response.user_output = serde_json::to_string_pretty(&processes)
-                .unwrap_or_else(|_| "[]".to_string());
+            response.user_output = format!("Collected {} processes", processes.len());
             response.processes = Some(processes);
             response.completed = true;
         }
