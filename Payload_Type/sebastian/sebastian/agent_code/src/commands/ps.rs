@@ -2,7 +2,7 @@ use crate::structs::{ProcessDetails, Task};
 use crate::utils;
 use serde::Deserialize;
 use std::collections::HashMap;
-use sysinfo::System;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 #[derive(Deserialize)]
 struct PsArgs {
@@ -29,33 +29,49 @@ pub async fn execute(task: Task) {
         args.regex_filter
     ));
 
-    // Run sysinfo in a blocking thread since it does heavy system calls
+    // Run sysinfo in a blocking thread with a timeout
     let regex_filter = args.regex_filter.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let blocking_handle = tokio::task::spawn_blocking(move || {
+        utils::print_debug("ps: spawn_blocking started, creating System");
         collect_processes(&regex_filter)
-    })
-    .await;
+    });
+
+    // 30-second timeout to prevent infinite hangs
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), blocking_handle).await;
 
     match result {
-        Ok(processes) => {
+        Ok(Ok(processes)) => {
             utils::print_debug(&format!("ps: collected {} processes", processes.len()));
             response.user_output = serde_json::to_string_pretty(&processes)
                 .unwrap_or_else(|_| "[]".to_string());
             response.processes = Some(processes);
             response.completed = true;
         }
-        Err(e) => {
-            utils::print_debug(&format!("ps: spawn_blocking failed: {:?}", e));
+        Ok(Err(e)) => {
+            utils::print_debug(&format!("ps: spawn_blocking panicked: {:?}", e));
             response.set_error(&format!("Failed to collect processes: {:?}", e));
+        }
+        Err(_) => {
+            utils::print_debug("ps: timed out after 30 seconds");
+            response.set_error("Process listing timed out after 30 seconds");
         }
     }
 
+    utils::print_debug("ps: sending response");
     let _ = task.job.send_responses.send(response).await;
+    utils::print_debug("ps: response sent, removing task");
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
+    utils::print_debug("ps: done");
 }
 
 fn collect_processes(regex_filter: &str) -> Vec<ProcessDetails> {
-    let sys = System::new_all();
+    // Only refresh process info — NOT cpu, memory, disks, networks, or components
+    // (System::new_all() refreshes everything including IOKit temperature sensors
+    // which can hang on macOS)
+    let sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    utils::print_debug(&format!("ps: System created, {} processes", sys.processes().len()));
 
     let re = if !regex_filter.is_empty() {
         regex::Regex::new(regex_filter).ok()
@@ -109,5 +125,6 @@ fn collect_processes(regex_filter: &str) -> Vec<ProcessDetails> {
             additional_information: HashMap::new(),
         });
     }
+    utils::print_debug(&format!("ps: built {} ProcessDetails", processes.len()));
     processes
 }
