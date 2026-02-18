@@ -162,6 +162,11 @@ pub fn drain_poll_buffer() -> MythicMessage {
     msg
 }
 
+/// Re-buffer a MythicMessage that failed to send, so its contents aren't lost.
+pub fn buffer_failed_message(msg: MythicMessage) {
+    buffer_message(msg);
+}
+
 /// Store a MythicMessage's contents into the global poll buffer.
 /// Used by response listeners when no push channel is available.
 fn buffer_message(msg: MythicMessage) {

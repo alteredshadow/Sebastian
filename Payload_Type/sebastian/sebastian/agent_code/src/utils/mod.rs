@@ -12,13 +12,11 @@ use std::sync::RwLock;
 
 /// Print debug messages only when debug_mode feature is enabled
 pub fn print_debug(msg: &str) {
-    // Always write to stderr for diagnostics, in addition to log if debug_mode is enabled
-    unsafe {
-        let formatted = format!("[debug] {}\n", msg);
-        libc::write(2, formatted.as_ptr() as *const libc::c_void, formatted.len());
-    }
-
     if cfg!(feature = "debug_mode") {
+        unsafe {
+            let formatted = format!("[debug] {}\n", msg);
+            libc::write(2, formatted.as_ptr() as *const libc::c_void, formatted.len());
+        }
         log::debug!("{}", msg);
     }
 }
@@ -156,13 +154,21 @@ pub fn get_architecture() -> String {
     std::env::consts::ARCH.to_string()
 }
 
-/// Get domain
+/// Get domain from Kerberos config (matches Poseidon behavior)
 pub fn get_domain() -> String {
-    get_hostname()
-        .split('.')
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join(".")
+    if let Ok(contents) = std::fs::read_to_string("/etc/krb5.conf") {
+        for line in contents.lines() {
+            if line.contains("default_realm") {
+                if let Some(realm) = line.split('=').nth(1) {
+                    let realm = realm.trim();
+                    if !realm.is_empty() {
+                        return realm.to_string();
+                    }
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 /// Check if running as elevated (root/admin)

