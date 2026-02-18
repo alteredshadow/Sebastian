@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     libc6-dev-amd64-cross \
     g++-aarch64-linux-gnu \
     libc6-dev-arm64-cross \
+    musl-tools \
     protobuf-compiler \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -69,6 +70,8 @@ RUN mkdir -p /opt/macos-stubs/lib \
 # Add cross-compilation targets for the Rust agent
 RUN rustup target add x86_64-unknown-linux-gnu \
     && rustup target add aarch64-unknown-linux-gnu \
+    && rustup target add x86_64-unknown-linux-musl \
+    && rustup target add aarch64-unknown-linux-musl \
     && rustup target add x86_64-apple-darwin \
     && rustup target add aarch64-apple-darwin
 
