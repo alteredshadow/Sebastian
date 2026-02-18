@@ -447,15 +447,22 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	if strip {
 		rustflags += "-C strip=symbols "
 	}
-	if static && targetOs == "linux" {
-		rustflags += "-C target-feature=+crt-static "
-	}
 	// Set cross-compilation linker for Linux targets
 	if targetOs == "linux" {
-		if rustArch == "aarch64" {
-			rustflags += "-C linker=aarch64-linux-gnu-gcc "
+		if static {
+			// musl target: use musl-gcc linker
+			if rustArch == "aarch64" {
+				rustflags += "-C linker=aarch64-linux-gnu-gcc "
+			} else {
+				rustflags += "-C linker=musl-gcc "
+			}
 		} else {
-			rustflags += "-C linker=x86_64-linux-gnu-gcc "
+			// gnu target: use gnu-gcc linker
+			if rustArch == "aarch64" {
+				rustflags += "-C linker=aarch64-linux-gnu-gcc "
+			} else {
+				rustflags += "-C linker=x86_64-linux-gnu-gcc "
+			}
 		}
 	}
 	// For macOS cross-compilation: add SDK stub search paths and allow unresolved symbols
