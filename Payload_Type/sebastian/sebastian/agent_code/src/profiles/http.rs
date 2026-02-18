@@ -285,20 +285,26 @@ impl HttpProfile {
                 .await
             {
                 Ok(resp) => {
-                    utils::print_debug(&format!("HTTP: Received response with status: {}", resp.status()));
-                    match resp.text().await {
-                        Ok(text) => {
-                            utils::print_debug(&format!("HTTP: Response text length: {}", text.len()));
-                            if let Some(decoded) = self.decode_response(&text) {
-                                utils::print_debug("HTTP: Successfully decoded response");
-                                return Some(decoded);
+                    let status = resp.status();
+                    utils::print_debug(&format!("HTTP: Received response with status: {}", status));
+                    if status.is_success() {
+                        match resp.text().await {
+                            Ok(text) => {
+                                utils::print_debug(&format!("HTTP: Response text length: {}", text.len()));
+                                if let Some(decoded) = self.decode_response(&text) {
+                                    utils::print_debug("HTTP: Successfully decoded response");
+                                    return Some(decoded);
+                                }
+                                utils::print_debug("HTTP: Failed to decode response");
+                                return None;
                             }
-                            utils::print_debug("HTTP: Failed to decode response");
-                            return None;
+                            Err(e) => {
+                                utils::print_debug(&format!("HTTP: Failed to read response text: {:?}", e));
+                            }
                         }
-                        Err(e) => {
-                            utils::print_debug(&format!("HTTP: Failed to read response text: {:?}", e));
-                        }
+                    } else {
+                        utils::print_debug(&format!("HTTP: Non-success status {}, will retry", status));
+                        profiles::increment_failed_connection("http");
                     }
                 }
                 Err(e) => {
@@ -539,6 +545,8 @@ impl Profile for HttpProfile {
                 Ok(j) => j,
                 Err(e) => {
                     utils::print_debug(&format!("HTTP: Failed to serialize message: {:?}", e));
+                    // Re-buffer so responses aren't lost
+                    crate::responses::buffer_failed_message(msg);
                     continue;
                 }
             };
@@ -563,7 +571,9 @@ impl Profile for HttpProfile {
                     }
                 }
             } else {
-                utils::print_debug("HTTP: send_message returned None");
+                utils::print_debug("HTTP: send_message returned None, re-buffering message");
+                // Put the message back into the buffer so responses aren't lost
+                crate::responses::buffer_failed_message(msg);
             }
         }
 
