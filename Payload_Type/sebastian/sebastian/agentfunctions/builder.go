@@ -412,7 +412,8 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	if targetOs == "darwin" {
 		rustTarget = fmt.Sprintf("%s-apple-darwin", rustArch)
 	} else {
-		if static {
+		// musl doesn't support cdylib (shared libraries), so only use it for bin/staticlib
+		if static && mode != "c-shared" {
 			rustTarget = fmt.Sprintf("%s-unknown-linux-musl", rustArch)
 		} else {
 			rustTarget = fmt.Sprintf("%s-unknown-linux-gnu", rustArch)
