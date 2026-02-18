@@ -448,17 +448,15 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	if strip {
 		rustflags += "-C strip=symbols "
 	}
-	// Set cross-compilation linker for Linux targets
+	// Set linker for Linux targets based on actual target triple
 	if targetOs == "linux" {
-		if static {
-			// musl target: use musl-gcc linker
+		if strings.Contains(rustTarget, "musl") {
 			if rustArch == "aarch64" {
 				rustflags += "-C linker=aarch64-linux-gnu-gcc "
 			} else {
 				rustflags += "-C linker=musl-gcc "
 			}
 		} else {
-			// gnu target: use gnu-gcc linker
 			if rustArch == "aarch64" {
 				rustflags += "-C linker=aarch64-linux-gnu-gcc "
 			} else {
