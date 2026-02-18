@@ -1,4 +1,5 @@
 use crate::structs::Task;
+#[cfg(target_os = "macos")]
 use tokio::process::Command;
 
 pub async fn execute(task: Task) {
