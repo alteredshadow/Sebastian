@@ -432,10 +432,15 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	}
 
 	// Build the cargo command
-	// Use cargo-zigbuild for macOS targets (provides cross-compilation C compiler)
+	// Use cargo-zigbuild for macOS and Linux gnu targets
+	// For Linux gnu: append glibc version suffix so the binary works on older distros
+	zigbuildTarget := rustTarget
+	if targetOs == "linux" && strings.Contains(rustTarget, "gnu") {
+		zigbuildTarget = rustTarget + ".2.17"
+	}
 	cargoArgs := []string{"build", "--release", "--target", rustTarget}
-	if targetOs == "darwin" {
-		cargoArgs = []string{"zigbuild", "--release", "--target", rustTarget}
+	if targetOs == "darwin" || (targetOs == "linux" && strings.Contains(rustTarget, "gnu")) {
+		cargoArgs = []string{"zigbuild", "--release", "--target", zigbuildTarget}
 	}
 	if crateType != "bin" {
 		// For library builds, we need to set the crate type
@@ -448,20 +453,12 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 	if strip {
 		rustflags += "-C strip=symbols "
 	}
-	// Set linker for Linux targets based on actual target triple
-	if targetOs == "linux" {
-		if strings.Contains(rustTarget, "musl") {
-			if rustArch == "aarch64" {
-				rustflags += "-C linker=aarch64-linux-gnu-gcc "
-			} else {
-				rustflags += "-C linker=musl-gcc "
-			}
+	// Set linker for Linux musl targets (zigbuild handles gnu targets)
+	if targetOs == "linux" && strings.Contains(rustTarget, "musl") {
+		if rustArch == "aarch64" {
+			rustflags += "-C linker=aarch64-linux-gnu-gcc "
 		} else {
-			if rustArch == "aarch64" {
-				rustflags += "-C linker=aarch64-linux-gnu-gcc "
-			} else {
-				rustflags += "-C linker=x86_64-linux-gnu-gcc "
-			}
+			rustflags += "-C linker=musl-gcc "
 		}
 	}
 	// For macOS cross-compilation: add SDK stub search paths and allow unresolved symbols
