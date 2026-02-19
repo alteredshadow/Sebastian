@@ -7,9 +7,11 @@ pub mod structs;
 pub mod tasks;
 pub mod utils;
 
-/// Auto-start when loaded as a shared library.
+/// Auto-start when loaded as a shared library on macOS.
 /// Uses raw pthread_create instead of std::thread::spawn because Rust's
 /// standard library may not be fully initialized during __mod_init_func.
+/// On Linux, callers should invoke run_main() directly.
+#[cfg(target_os = "macos")]
 #[ctor::ctor]
 fn _auto_start() {
     unsafe {
@@ -29,6 +31,7 @@ fn _auto_start() {
     }
 }
 
+#[cfg(target_os = "macos")]
 extern "C" fn _thread_entry(_: *mut libc::c_void) -> *mut libc::c_void {
     let result = std::panic::catch_unwind(|| {
         run_main();
