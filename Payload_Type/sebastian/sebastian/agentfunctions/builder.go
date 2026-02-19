@@ -23,9 +23,9 @@ import (
 const version = "0.1.0"
 
 type sleepInfoStruct struct {
-	Interval int       `json:"interval"`
-	Jitter   int       `json:"jitter"`
-	KillDate time.Time `json:"killdate"`
+	Interval int    `json:"interval"`
+	Jitter   int    `json:"jitter"`
+	KillDate string `json:"killdate"`
 }
 
 var payloadDefinition = agentstructs.PayloadType{
