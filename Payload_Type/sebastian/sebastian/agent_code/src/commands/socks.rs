@@ -25,7 +25,7 @@ const REPLY_CMD_NOT_SUPPORTED: u8 = 0x07;
 const REPLY_ADDR_NOT_SUPPORTED: u8 = 0x08;
 
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const READ_BUF_SIZE: usize = 65536;
+const READ_BUF_SIZE: usize = 4096;
 
 /// Per-connection channel capacity. Large enough to absorb bursts
 /// without blocking the main dispatch loop.
