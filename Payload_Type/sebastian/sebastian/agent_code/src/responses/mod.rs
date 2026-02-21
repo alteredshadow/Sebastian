@@ -53,6 +53,10 @@ pub struct ResponseChannels {
 
     // Inbound channel for messages from egress/P2P
     pub handle_inbound_mythic_message_tx: mpsc::Sender<crate::structs::MythicMessageResponse>,
+
+    // Receivers for SOCKS/RPFWD (consumed by proxy handlers)
+    pub from_mythic_socks_rx: mpsc::Receiver<SocksMsg>,
+    pub from_mythic_rpfwd_rx: mpsc::Receiver<SocksMsg>,
 }
 
 /// Buffered responses waiting to be sent to Mythic
@@ -101,8 +105,8 @@ pub fn initialize(
     let (alert_tx, alert_rx) = mpsc::channel::<Alert>(100);
     let (socks_out_tx, socks_out_rx) = mpsc::channel::<SocksMsg>(10000);
     let (rpfwd_out_tx, rpfwd_out_rx) = mpsc::channel::<SocksMsg>(10000);
-    let (socks_in_tx, _socks_in_rx) = mpsc::channel::<SocksMsg>(10000);
-    let (rpfwd_in_tx, _rpfwd_in_rx) = mpsc::channel::<SocksMsg>(10000);
+    let (socks_in_tx, socks_in_rx) = mpsc::channel::<SocksMsg>(10000);
+    let (rpfwd_in_tx, rpfwd_in_rx) = mpsc::channel::<SocksMsg>(10000);
     let (inbound_tx, _inbound_rx) =
         mpsc::channel::<crate::structs::MythicMessageResponse>(10);
 
@@ -147,6 +151,8 @@ pub fn initialize(
         from_mythic_socks_tx: socks_in_tx,
         from_mythic_rpfwd_tx: rpfwd_in_tx,
         handle_inbound_mythic_message_tx: inbound_tx,
+        from_mythic_socks_rx: socks_in_rx,
+        from_mythic_rpfwd_rx: rpfwd_in_rx,
     }
 }
 
