@@ -153,18 +153,20 @@ async fn dispatch_loop(
     while let Some(msg) = from_mythic_rx.recv().await {
         let server_id = msg.server_id;
 
-        // Check if we already have a connection for this server_id
-        {
+        // Clone sender under the lock, then release before sending.
+        let tx = {
             let conns = manager.connections.lock().await;
-            if let Some(tx) = conns.get(&server_id) {
-                if tx.try_send(msg).is_err() {
-                    utils::print_debug(&format!(
-                        "SOCKS: dropping msg for server_id={}, channel full/closed",
-                        server_id
-                    ));
-                }
-                continue;
+            conns.get(&server_id).map(|tx| tx.clone())
+        };
+
+        if let Some(tx) = tx {
+            if tx.try_send(msg).is_err() {
+                utils::print_debug(&format!(
+                    "SOCKS: dropping msg for server_id={}, channel full/closed",
+                    server_id
+                ));
             }
+            continue;
         }
 
         // Unknown server_id with exit flag — nothing to do

@@ -129,9 +129,15 @@ async fn dispatch_loop(
     while let Some(msg) = from_mythic_rx.recv().await {
         let server_id = msg.server_id;
 
-        let conns = manager.connections.lock().await;
-        if let Some(entry) = conns.get(&server_id) {
-            if entry.tx.try_send(msg).is_err() {
+        // Clone the sender under the lock, then release before sending.
+        // This prevents contention with handle_connection registering new connections.
+        let tx = {
+            let conns = manager.connections.lock().await;
+            conns.get(&server_id).map(|entry| entry.tx.clone())
+        };
+
+        if let Some(tx) = tx {
+            if tx.try_send(msg).is_err() {
                 utils::print_debug(&format!(
                     "RPFWD: dropping msg for server_id={}, channel full/closed",
                     server_id
@@ -176,7 +182,11 @@ async fn start_listener(port: u16, manager: Arc<RpfwdManager>) -> Result<(), Str
                                 port, peer_addr
                             ));
                             let server_id = rand::random::<u32>() & 0x7FFFFFFF;
-                            handle_connection(server_id, stream, port, mgr.clone()).await;
+                            // Spawn connection handler so accept loop isn't blocked
+                            let m = mgr.clone();
+                            tokio::spawn(async move {
+                                handle_connection(server_id, stream, port, m).await;
+                            });
                         }
                         Err(e) => {
                             utils::print_debug(&format!(

