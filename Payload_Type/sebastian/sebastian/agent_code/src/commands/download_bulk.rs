@@ -4,7 +4,9 @@ use tokio::sync::mpsc;
 
 #[derive(Deserialize)]
 struct DownloadBulkArgs {
-    files: Vec<String>,
+    paths: Vec<String>,
+    #[serde(default)]
+    compress: bool,
 }
 
 pub async fn execute(task: Task) {
@@ -21,7 +23,7 @@ pub async fn execute(task: Task) {
     };
 
     let mut results = Vec::new();
-    for file_path in &args.files {
+    for file_path in &args.paths {
         let path = std::path::Path::new(file_path);
         match tokio::fs::read(path).await {
             Ok(data) => {
