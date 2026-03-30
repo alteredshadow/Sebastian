@@ -113,7 +113,7 @@ pub struct MythicMessage {
     pub responses: Option<Vec<Response>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub socks: Option<Vec<SocksMsg>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rpfwd", skip_serializing_if = "Option::is_none")]
     pub rpfwds: Option<Vec<SocksMsg>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<Vec<P2PConnectionMessage>>,
@@ -547,6 +547,7 @@ pub struct SocksMsg {
     pub server_id: u32,
     pub data: String,
     pub exit: bool,
+    #[serde(default)]
     pub port: u32,
 }
 

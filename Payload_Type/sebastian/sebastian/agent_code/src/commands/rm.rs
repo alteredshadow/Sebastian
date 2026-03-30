@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct RmArgs {
+    #[serde(rename = "file")]
     path: String,
     #[serde(default)]
     recursive: bool,
