@@ -6,6 +6,7 @@ import (
 	agentstructs "github.com/MythicMeta/MythicContainer/agent_structs"
 	"github.com/MythicMeta/MythicContainer/logging"
 	"path/filepath"
+	"strings"
 )
 
 func init() {
@@ -82,11 +83,39 @@ func init() {
 			return args.LoadArgsFromDictionary(input)
 		},
 		TaskFunctionParseArgString: func(args *agentstructs.PTTaskMessageArgsData, input string) error {
-			if len(input) > 0 {
-				return args.LoadArgsFromJSONString(input)
-			} else {
+			if len(input) == 0 {
 				return errors.New("Must supply arguments")
 			}
+			// Try JSON first (e.g. from modal submission)
+			if err := args.LoadArgsFromJSONString(input); err == nil {
+				return nil
+			}
+			// Fall back to CLI-style parsing: -path "/some/path" -path "/other" -compress
+			var paths []string
+			compress := false
+			fields := strings.Fields(input)
+			for i := 0; i < len(fields); i++ {
+				switch fields[i] {
+				case "-path", "-paths":
+					if i+1 < len(fields) {
+						i++
+						paths = append(paths, strings.Trim(fields[i], "\""))
+					}
+				case "-compress":
+					compress = true
+				}
+			}
+			args.AddArg(agentstructs.CommandParameter{
+				Name:          "paths",
+				DefaultValue:  paths,
+				ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_ARRAY,
+			})
+			args.AddArg(agentstructs.CommandParameter{
+				Name:          "compress",
+				DefaultValue:  compress,
+				ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_BOOLEAN,
+			})
+			return nil
 		},
 	})
 }
