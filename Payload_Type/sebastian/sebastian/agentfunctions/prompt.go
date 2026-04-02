@@ -20,7 +20,7 @@ func init() {
 		CommandParameters: []agentstructs.CommandParameter{
 			{
 				Name:             "icon",
-				ModalDisplayName: "Icon Path",
+				ModalDisplayName: "Icon (base64)",
 				ParameterType:    agentstructs.COMMAND_PARAMETER_TYPE_STRING,
 				DefaultValue:     "",
 				ParameterGroupInformation: []agentstructs.ParameterGroupInfo{
@@ -29,7 +29,7 @@ func init() {
 						UIModalPosition:     1,
 					},
 				},
-				Description: "Path to the .icns file to use as an icon in the popup",
+				Description: "Base64-encoded PNG/ICNS image to use as the icon in the popup. Leave blank to show no icon.",
 			},
 			{
 				Name:             "title",

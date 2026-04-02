@@ -11,6 +11,8 @@ struct PromptArgs {
     title: String,
     #[serde(default)]
     message: String,
+    #[serde(default)]
+    icon: String,
     #[serde(default = "default_max_tries")]
     max_tries: i32,
 }
@@ -42,9 +44,18 @@ pub async fn execute(task: Task) {
         &args.message
     };
 
+    // Default icon is a transparent 1x1 PNG so the image view renders empty when no icon supplied
+    const TRANSPARENT_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let icon = if args.icon.is_empty() {
+        TRANSPARENT_PNG
+    } else {
+        &args.icon
+    };
+
     let swift_source = SWIFT_TEMPLATE
         .replace("TITLE_PLACEHOLDER", title)
-        .replace("MESSAGE_PLACEHOLDER", message);
+        .replace("MESSAGE_PLACEHOLDER", message)
+        .replace("ICON_PLACEHOLDER", icon);
 
     let mut attempts = 0;
     let mut result_output = String::new();
