@@ -47,10 +47,9 @@ func init() {
 			}
 		},
 		TaskFunctionParseArgString: func(args *agentstructs.PTTaskMessageArgsData, input string) error {
-			//return args.LoadArgsFromJSONString(input)
 			args.AddArg(agentstructs.CommandParameter{
 				Name:          "file",
-				DefaultValue:  args.GetCommandLine(),
+				DefaultValue:  input,
 				ParameterType: agentstructs.COMMAND_PARAMETER_TYPE_STRING,
 			})
 			return nil
