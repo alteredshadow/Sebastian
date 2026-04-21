@@ -121,6 +121,15 @@ var payloadDefinition = agentstructs.PayloadType{
 			GroupName:     "egress",
 			UiPosition:    9,
 		},
+		{
+			Name:          "http_sni",
+			Description:   "Override the TLS SNI hostname for HTTP/HTTPS C2 (e.g. a CDN domain). The callback_host must be an IP address when this is set. Leave blank to use the default hostname from callback_host.",
+			Required:      false,
+			DefaultValue:  "",
+			ParameterType: agentstructs.BUILD_PARAMETER_TYPE_STRING,
+			GroupName:     "egress",
+			UiPosition:    10,
+		},
 	},
 	SupportsMultipleC2InBuild: true,
 	C2ParameterDeviations: map[string]map[string]agentstructs.C2ParameterDeviation{
@@ -278,6 +287,11 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 		envVars["EGRESS_ORDER"] = base64.StdEncoding.EncodeToString(egressBytes)
 	}
 
+	httpSNI, err := payloadBuildMsg.BuildParameters.GetStringArg("http_sni")
+	if err != nil {
+		httpSNI = ""
+	}
+
 	// Process C2 profile parameters
 	for index := range payloadBuildMsg.C2Profiles {
 		initialConfig := make(map[string]interface{})
@@ -390,6 +404,11 @@ func build(payloadBuildMsg agentstructs.PayloadBuildMessage) agentstructs.Payloa
 				}
 			}
 		}
+		// Inject SNI override into HTTP profile config
+		if payloadBuildMsg.C2Profiles[index].Name == "http" && httpSNI != "" {
+			initialConfig["sni"] = httpSNI
+		}
+
 		initialConfigBytes, err := json.Marshal(initialConfig)
 		if err != nil {
 			payloadBuildResponse.Success = false
