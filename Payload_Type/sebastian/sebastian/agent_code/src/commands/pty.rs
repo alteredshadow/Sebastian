@@ -71,8 +71,10 @@ pub async fn execute(task: Task) {
             let _ = nix::unistd::close(pty.master.as_raw_fd());
             let _ = nix::unistd::close(pty.slave.as_raw_fd());
 
-            let path = std::ffi::CString::new(args.program_path.as_bytes()).unwrap();
-            let _ = nix::unistd::execvp(&path, &[&path]);
+            match std::ffi::CString::new(args.program_path.as_bytes()) {
+                Ok(path) => { let _ = nix::unistd::execvp(&path, &[&path]); }
+                Err(_) => {} // null byte in path — fall through to exit
+            }
             std::process::exit(1);
         }
         Ok(nix::unistd::ForkResult::Parent { child }) => {
@@ -85,7 +87,15 @@ pub async fn execute(task: Task) {
 
             // Consume OwnedFd and dup for separate read/write
             let master_fd = pty.master.into_raw_fd();
-            let write_fd = nix::unistd::dup(master_fd).expect("dup master fd");
+            let write_fd = match nix::unistd::dup(master_fd) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    response.set_error(&format!("Failed to dup PTY fd: {}", e));
+                    let _ = task.job.send_responses.send(response).await;
+                    let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
+                    return;
+                }
+            };
 
             let mut master_read = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
             let mut master_write = unsafe { tokio::fs::File::from_raw_fd(write_fd) };
