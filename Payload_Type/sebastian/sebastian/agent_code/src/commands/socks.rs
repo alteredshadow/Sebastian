@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{mpsc, watch, Mutex, Notify};
 use tokio::time::Duration;
 
 // SOCKS5 protocol constants
@@ -25,7 +25,7 @@ const REPLY_CMD_NOT_SUPPORTED: u8 = 0x07;
 const REPLY_ADDR_NOT_SUPPORTED: u8 = 0x08;
 
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const READ_BUF_SIZE: usize = 4096;
+const READ_BUF_SIZE: usize = 16384;
 
 /// Per-connection channel capacity. Large enough to absorb bursts
 /// without blocking the main dispatch loop.
@@ -160,11 +160,22 @@ async fn dispatch_loop(
         };
 
         if let Some(tx) = tx {
-            if tx.try_send(msg).is_err() {
-                utils::print_debug(&format!(
-                    "SOCKS: dropping msg for server_id={}, channel full/closed",
-                    server_id
-                ));
+            if let Err(e) = tx.try_send(msg) {
+                match e {
+                    mpsc::error::TrySendError::Full(_) => {
+                        // Channel full — closing the connection is safer than dropping bytes
+                        // and silently corrupting the TCP stream.
+                        utils::print_debug(&format!(
+                            "SOCKS: channel full for server_id={}, closing connection",
+                            server_id
+                        ));
+                        manager.remove(server_id).await;
+                        manager.send_bare_exit(server_id).await;
+                    }
+                    mpsc::error::TrySendError::Closed(_) => {
+                        // Connection already being cleaned up — nothing to do.
+                    }
+                }
             }
             continue;
         }
@@ -272,19 +283,25 @@ async fn handle_connect(server_id: u32, data: Vec<u8>, manager: Arc<ConnectionMa
     // Create channel for Mythic → target direction
     let (conn_tx, conn_rx) = mpsc::channel::<SocksMsg>(CONN_CHANNEL_SIZE);
 
+    // Shutdown coordination: when either task exits it sends true so the
+    // other task can stop promptly rather than leaking until the target closes.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
     // Register this connection
     manager.connections.lock().await.insert(server_id, conn_tx);
 
     // Spawn reader: target → Mythic
     let mgr_r = manager.clone();
+    let sd_tx_r = shutdown_tx.clone();
+    let sd_rx_r = shutdown_rx.clone();
     tokio::spawn(async move {
-        read_from_target(read_half, server_id, mgr_r).await;
+        read_from_target(read_half, server_id, mgr_r, sd_tx_r, sd_rx_r).await;
     });
 
     // Spawn writer: Mythic → target
     let mgr_w = manager.clone();
     tokio::spawn(async move {
-        write_to_target(conn_rx, write_half, server_id, mgr_w).await;
+        write_to_target(conn_rx, write_half, server_id, mgr_w, shutdown_tx, shutdown_rx).await;
     });
 }
 
@@ -293,65 +310,93 @@ async fn handle_connect(server_id: u32, data: Vec<u8>, manager: Arc<ConnectionMa
 // ============================================================================
 
 /// Read data from the proxied target and send it to Mythic.
+/// Exits immediately if the write task signals shutdown via `shutdown_rx`.
 async fn read_from_target(
     mut read_half: tokio::net::tcp::OwnedReadHalf,
     server_id: u32,
     manager: Arc<ConnectionManager>,
+    shutdown_tx: watch::Sender<bool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let mut buf = vec![0u8; READ_BUF_SIZE];
     loop {
-        match read_half.read(&mut buf).await {
-            Ok(0) => {
-                // Connection closed normally
-                manager.send_bare_exit(server_id).await;
+        tokio::select! {
+            biased;
+            // Write task (or flush) signaled us to stop.
+            _ = shutdown_rx.changed() => {
                 manager.remove(server_id).await;
                 return;
             }
-            Ok(n) => {
-                manager.send_data(server_id, &buf[..n]).await;
-            }
-            Err(_) => {
-                manager.send_bare_exit(server_id).await;
-                manager.remove(server_id).await;
-                return;
+            result = read_half.read(&mut buf) => {
+                match result {
+                    Ok(0) | Err(_) => {
+                        manager.send_bare_exit(server_id).await;
+                        manager.remove(server_id).await;
+                        let _ = shutdown_tx.send(true);
+                        return;
+                    }
+                    Ok(n) => {
+                        manager.send_data(server_id, &buf[..n]).await;
+                    }
+                }
             }
         }
     }
 }
 
 /// Read data from Mythic (via channel) and write it to the proxied target.
+/// Exits immediately if the read task signals shutdown via `shutdown_rx`.
 async fn write_to_target(
     mut from_mythic: mpsc::Receiver<SocksMsg>,
     mut write_half: tokio::net::tcp::OwnedWriteHalf,
     server_id: u32,
     manager: Arc<ConnectionManager>,
+    shutdown_tx: watch::Sender<bool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    while let Some(msg) = from_mythic.recv().await {
-        if msg.exit {
-            manager.remove(server_id).await;
-            return;
-        }
-
-        if msg.data.is_empty() {
-            continue;
-        }
-
-        let data = match BASE64.decode(&msg.data) {
-            Ok(d) => d,
-            Err(_) => {
-                manager.send_bare_exit(server_id).await;
-                manager.remove(server_id).await;
+    loop {
+        tokio::select! {
+            biased;
+            // Read task (or flush) signaled us to stop.
+            _ = shutdown_rx.changed() => {
                 return;
             }
-        };
-
-        if write_half.write_all(&data).await.is_err() {
-            manager.send_bare_exit(server_id).await;
-            manager.remove(server_id).await;
-            return;
+            msg = from_mythic.recv() => {
+                match msg {
+                    None => {
+                        // Channel closed — flush or connection removed.
+                        let _ = shutdown_tx.send(true);
+                        return;
+                    }
+                    Some(msg) => {
+                        if msg.exit {
+                            manager.remove(server_id).await;
+                            let _ = shutdown_tx.send(true);
+                            return;
+                        }
+                        if msg.data.is_empty() {
+                            continue;
+                        }
+                        let data = match BASE64.decode(&msg.data) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                manager.send_bare_exit(server_id).await;
+                                manager.remove(server_id).await;
+                                let _ = shutdown_tx.send(true);
+                                return;
+                            }
+                        };
+                        if write_half.write_all(&data).await.is_err() {
+                            manager.send_bare_exit(server_id).await;
+                            manager.remove(server_id).await;
+                            let _ = shutdown_tx.send(true);
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
-    // Channel closed (flush or connection removed) — TCP stream drops automatically.
 }
 
 // ============================================================================
