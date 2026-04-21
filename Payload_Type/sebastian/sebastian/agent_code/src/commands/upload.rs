@@ -1,5 +1,6 @@
 use crate::structs::{GetFileFromMythicStruct, Task};
 use serde::Deserialize;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 #[derive(Deserialize)]
@@ -51,23 +52,46 @@ pub async fn execute(task: Task) {
         return;
     }
 
-    // Collect chunks
-    let mut file_data = Vec::new();
+    // Open destination file and stream chunks directly to disk to avoid
+    // buffering the entire file in memory.
+    let mut file = match tokio::fs::File::create(&args.remote_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            response.set_error(&format!("Failed to create file: {}", e));
+            let _ = task.job.send_responses.send(response).await;
+            let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
+            return;
+        }
+    };
+
+    let mut total_bytes = 0usize;
+    let mut write_error: Option<String> = None;
     while let Some(chunk) = chunk_rx.recv().await {
-        file_data.extend_from_slice(&chunk);
+        if chunk.is_empty() {
+            // Empty chunk signals completion from the file transfer handler
+            break;
+        }
+        total_bytes += chunk.len();
+        if let Err(e) = file.write_all(&chunk).await {
+            write_error = Some(format!("Failed to write chunk: {}", e));
+            break;
+        }
     }
 
-    // Write to disk
-    match tokio::fs::write(&args.remote_path, &file_data).await {
-        Ok(_) => {
-            response.user_output = format!(
-                "Uploaded {} bytes to {}",
-                file_data.len(),
-                args.remote_path
-            );
+    if let Err(e) = file.flush().await {
+        write_error = Some(format!("Failed to flush file: {}", e));
+    }
+
+    match write_error {
+        Some(e) => {
+            // Best-effort cleanup of partial file
+            let _ = tokio::fs::remove_file(&args.remote_path).await;
+            response.set_error(&e);
+        }
+        None => {
+            response.user_output = format!("Uploaded {} bytes to {}", total_bytes, args.remote_path);
             response.completed = true;
         }
-        Err(e) => response.set_error(&format!("Failed to write file: {}", e)),
     }
 
     let _ = task.job.send_responses.send(response).await;

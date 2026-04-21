@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::Duration;
 
-const READ_BUF_SIZE: usize = 4096;
+const READ_BUF_SIZE: usize = 16384;
 const CONN_CHANNEL_SIZE: usize = 200;
 
 #[derive(Deserialize)]
@@ -137,11 +137,22 @@ async fn dispatch_loop(
         };
 
         if let Some(tx) = tx {
-            if tx.try_send(msg).is_err() {
-                utils::print_debug(&format!(
-                    "RPFWD: dropping msg for server_id={}, channel full/closed",
-                    server_id
-                ));
+            if let Err(e) = tx.try_send(msg) {
+                match e {
+                    mpsc::error::TrySendError::Full(_) => {
+                        // Channel full — close the connection rather than silently
+                        // dropping bytes and corrupting the TCP stream.
+                        utils::print_debug(&format!(
+                            "RPFWD: channel full for server_id={}, closing connection",
+                            server_id
+                        ));
+                        manager.remove(server_id).await;
+                        manager.send_exit(server_id, 0).await;
+                    }
+                    mpsc::error::TrySendError::Closed(_) => {
+                        // Connection already being cleaned up — nothing to do.
+                    }
+                }
             }
         }
         // Unknown server_id messages are silently dropped
@@ -224,6 +235,10 @@ async fn handle_connection(
     // Create channel for Mythic → local direction
     let (conn_tx, conn_rx) = mpsc::channel::<SocksMsg>(CONN_CHANNEL_SIZE);
 
+    // Shutdown coordination: when either relay task exits it signals the other
+    // so neither leaks waiting for I/O that will never arrive.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
     // Register this connection
     manager
         .connections
@@ -233,14 +248,16 @@ async fn handle_connection(
 
     // Spawn reader: local → Mythic
     let mgr_r = manager.clone();
+    let sd_tx_r = shutdown_tx.clone();
+    let sd_rx_r = shutdown_rx.clone();
     tokio::spawn(async move {
-        read_from_local(read_half, server_id, port, mgr_r).await;
+        read_from_local(read_half, server_id, port, mgr_r, sd_tx_r, sd_rx_r).await;
     });
 
     // Spawn writer: Mythic → local
     let mgr_w = manager.clone();
     tokio::spawn(async move {
-        write_to_local(conn_rx, write_half, server_id, port, mgr_w).await;
+        write_to_local(conn_rx, write_half, server_id, port, mgr_w, shutdown_tx, shutdown_rx).await;
     });
 }
 
@@ -249,66 +266,93 @@ async fn handle_connection(
 // ============================================================================
 
 /// Read data from the local connection and send it to Mythic.
+/// Exits immediately if the write task signals shutdown via `shutdown_rx`.
 async fn read_from_local(
     mut read_half: tokio::net::tcp::OwnedReadHalf,
     server_id: u32,
     port: u16,
     manager: Arc<RpfwdManager>,
+    shutdown_tx: watch::Sender<bool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let mut buf = vec![0u8; READ_BUF_SIZE];
     loop {
-        match read_half.read(&mut buf).await {
-            Ok(0) => {
-                manager.send_exit(server_id, port).await;
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
                 manager.remove(server_id).await;
                 return;
             }
-            Ok(n) => {
-                manager.send_data(server_id, &buf[..n], port).await;
-            }
-            Err(_) => {
-                manager.send_exit(server_id, port).await;
-                manager.remove(server_id).await;
-                return;
+            result = read_half.read(&mut buf) => {
+                match result {
+                    Ok(0) | Err(_) => {
+                        manager.send_exit(server_id, port).await;
+                        manager.remove(server_id).await;
+                        let _ = shutdown_tx.send(true);
+                        return;
+                    }
+                    Ok(n) => {
+                        manager.send_data(server_id, &buf[..n], port).await;
+                    }
+                }
             }
         }
     }
 }
 
 /// Read data from Mythic (via channel) and write it to the local connection.
+/// Exits immediately if the read task signals shutdown via `shutdown_rx`.
 async fn write_to_local(
     mut from_mythic: mpsc::Receiver<SocksMsg>,
     mut write_half: tokio::net::tcp::OwnedWriteHalf,
     server_id: u32,
     port: u16,
     manager: Arc<RpfwdManager>,
+    shutdown_tx: watch::Sender<bool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    while let Some(msg) = from_mythic.recv().await {
-        if msg.exit {
-            manager.remove(server_id).await;
-            return;
-        }
-
-        if msg.data.is_empty() {
-            continue;
-        }
-
-        let data = match BASE64.decode(&msg.data) {
-            Ok(d) => d,
-            Err(_) => {
-                manager.send_exit(server_id, port).await;
-                manager.remove(server_id).await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
                 return;
             }
-        };
-
-        if write_half.write_all(&data).await.is_err() {
-            manager.send_exit(server_id, port).await;
-            manager.remove(server_id).await;
-            return;
+            msg = from_mythic.recv() => {
+                match msg {
+                    None => {
+                        // Channel closed — flush or connection removed.
+                        let _ = shutdown_tx.send(true);
+                        return;
+                    }
+                    Some(msg) => {
+                        if msg.exit {
+                            manager.remove(server_id).await;
+                            let _ = shutdown_tx.send(true);
+                            return;
+                        }
+                        if msg.data.is_empty() {
+                            continue;
+                        }
+                        let data = match BASE64.decode(&msg.data) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                manager.send_exit(server_id, port).await;
+                                manager.remove(server_id).await;
+                                let _ = shutdown_tx.send(true);
+                                return;
+                            }
+                        };
+                        if write_half.write_all(&data).await.is_err() {
+                            manager.send_exit(server_id, port).await;
+                            manager.remove(server_id).await;
+                            let _ = shutdown_tx.send(true);
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
-    // Channel closed — connection removed elsewhere
 }
 
 // ============================================================================
