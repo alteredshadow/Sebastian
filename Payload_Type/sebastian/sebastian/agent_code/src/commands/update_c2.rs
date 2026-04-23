@@ -4,9 +4,12 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct UpdateC2Args {
-    profile_name: String,
-    key: String,
-    value: String,
+    c2_name: String,
+    action: String,
+    #[serde(default)]
+    config_name: String,
+    #[serde(default)]
+    config_value: String,
 }
 
 pub async fn execute(task: Task) {
@@ -20,9 +23,31 @@ pub async fn execute(task: Task) {
             return;
         }
     };
-    profiles::update_c2_profile(&args.profile_name, &args.key, &args.value);
-    response.user_output = format!("Updated {}.{} = {}", args.profile_name, args.key, args.value);
-    response.completed = true;
+
+    match args.action.as_str() {
+        "start" => {
+            profiles::start_c2_profile(&args.c2_name);
+            response.user_output = format!("Started {}", args.c2_name);
+            response.completed = true;
+        }
+        "stop" => {
+            profiles::stop_c2_profile(&args.c2_name);
+            response.user_output = format!("Stopped {}", args.c2_name);
+            response.completed = true;
+        }
+        "update" => {
+            profiles::update_c2_profile(&args.c2_name, &args.config_name, &args.config_value);
+            response.user_output = format!(
+                "Updated {}.{} = {}",
+                args.c2_name, args.config_name, args.config_value
+            );
+            response.completed = true;
+        }
+        _ => {
+            response.set_error(&format!("Unknown action: {}", args.action));
+        }
+    }
+
     let _ = task.job.send_responses.send(response).await;
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
 }

@@ -733,6 +733,16 @@ impl Profile for HttpProfile {
             "callback_host" => {
                 let mut host = self.callback_host.write().unwrap();
                 *host = value.to_string();
+                // Clear cached SNI resolution — new host may resolve differently
+                let mut addr = self.sni_addr.write().unwrap();
+                *addr = None;
+            }
+            "sni" => {
+                let mut sni = self.sni.write().unwrap();
+                *sni = value.to_string();
+                // Clear cached resolution so the new SNI gets resolved on next request
+                let mut addr = self.sni_addr.write().unwrap();
+                *addr = None;
             }
             "callback_port" => {
                 if let Ok(port) = value.parse::<i32>() {
