@@ -83,7 +83,7 @@ pub async fn execute(task: Task) {
 
             response.user_output = format!("PTY opened with PID {}", child);
             response.completed = false;
-            let _ = task.job.send_responses.send(response).await;
+            let _ = task.job.send_responses.send(response.clone()).await;
 
             // Consume OwnedFd and dup for separate read/write
             let master_fd = pty.master.into_raw_fd();

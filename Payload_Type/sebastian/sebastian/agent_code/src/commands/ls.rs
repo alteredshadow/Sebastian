@@ -132,7 +132,7 @@ pub async fn execute(task: Task) {
     let _ = task.remove_running_task.send(task.data.task_id.clone()).await;
 }
 
-fn build_permission(meta: &std::fs::Metadata) -> FilePermission {
+pub(crate) fn build_permission(meta: &std::fs::Metadata) -> FilePermission {
     let mode = meta.permissions().mode();
     let perm_string = format!(
         "{}{}{}{}{}{}{}{}{}",
@@ -170,5 +170,157 @@ fn build_permission(meta: &std::fs::Metadata) -> FilePermission {
         user,
         group,
         symlink: String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::make_test_task;
+    use std::os::unix::fs::PermissionsExt;
+
+    // -------------------------------------------------------------------------
+    // build_permission — permission string encoding
+    // -------------------------------------------------------------------------
+
+    fn chmod_and_meta(path: &std::path::Path, mode: u32) -> std::fs::Metadata {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        std::fs::metadata(path).unwrap()
+    }
+
+    #[test]
+    fn test_permission_string_644() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("f.txt");
+        std::fs::write(&f, b"").unwrap();
+        let meta = chmod_and_meta(&f, 0o644);
+        let perm = build_permission(&meta);
+        assert_eq!(perm.permissions, "rw-r--r--");
+        assert!(!perm.setuid);
+        assert!(!perm.setgid);
+        assert!(!perm.sticky);
+    }
+
+    #[test]
+    fn test_permission_string_755() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("exe");
+        std::fs::write(&f, b"").unwrap();
+        let meta = chmod_and_meta(&f, 0o755);
+        let perm = build_permission(&meta);
+        assert_eq!(perm.permissions, "rwxr-xr-x");
+    }
+
+    #[test]
+    fn test_permission_string_000() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("locked");
+        std::fs::write(&f, b"").unwrap();
+        let meta = chmod_and_meta(&f, 0o000);
+        let perm = build_permission(&meta);
+        assert_eq!(perm.permissions, "---------");
+    }
+
+    #[test]
+    fn test_permission_string_777() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("open");
+        std::fs::write(&f, b"").unwrap();
+        let meta = chmod_and_meta(&f, 0o777);
+        let perm = build_permission(&meta);
+        assert_eq!(perm.permissions, "rwxrwxrwx");
+    }
+
+    #[test]
+    fn test_setuid_bit_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("suid");
+        std::fs::write(&f, b"").unwrap();
+        let meta = chmod_and_meta(&f, 0o4755);
+        let perm = build_permission(&meta);
+        assert!(perm.setuid);
+    }
+
+    #[test]
+    fn test_sticky_bit_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("sticky_dir");
+        std::fs::create_dir(&d).unwrap();
+        let meta = chmod_and_meta(&d, 0o1777);
+        let perm = build_permission(&meta);
+        assert!(perm.sticky);
+    }
+
+    // -------------------------------------------------------------------------
+    // execute — directory listing via full command path
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_ls_lists_directory_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), b"a").unwrap();
+        std::fs::write(dir.path().join("beta.txt"), b"b").unwrap();
+
+        let params = serde_json::json!({"path": dir.path().to_string_lossy()}).to_string();
+        let (task, mut resp_rx, _) = make_test_task("ls1", &params);
+        execute(task).await;
+
+        let resp = resp_rx.recv().await.unwrap();
+        assert!(resp.completed);
+        let fb = resp.file_browser.expect("file_browser must be populated for ls");
+        assert!(!fb.is_file, "directory path must report is_file=false");
+        let names: Vec<_> = fb.files.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"alpha.txt"), "alpha.txt missing from listing");
+        assert!(names.contains(&"beta.txt"), "beta.txt missing from listing");
+    }
+
+    #[tokio::test]
+    async fn test_ls_file_sets_is_file_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("single.txt");
+        std::fs::write(&f, b"content").unwrap();
+
+        let params = serde_json::json!({"path": f.to_string_lossy()}).to_string();
+        let (task, mut resp_rx, _) = make_test_task("ls2", &params);
+        execute(task).await;
+
+        let resp = resp_rx.recv().await.unwrap();
+        assert!(resp.completed);
+        let fb = resp.file_browser.expect("file_browser required");
+        assert!(fb.is_file);
+        assert_eq!(fb.file_size, 7);
+    }
+
+    #[tokio::test]
+    async fn test_ls_nonexistent_path_returns_error() {
+        let params = serde_json::json!({"path": "/no/such/directory_xyz"}).to_string();
+        let (task, mut resp_rx, _) = make_test_task("ls3", &params);
+        execute(task).await;
+
+        let resp = resp_rx.recv().await.unwrap();
+        assert_eq!(resp.status, "error");
+    }
+
+    #[tokio::test]
+    async fn test_ls_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = serde_json::json!({"path": dir.path().to_string_lossy()}).to_string();
+        let (task, mut resp_rx, _) = make_test_task("ls4", &params);
+        execute(task).await;
+
+        let resp = resp_rx.recv().await.unwrap();
+        assert!(resp.completed);
+        let fb = resp.file_browser.expect("file_browser required");
+        assert!(fb.files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ls_remove_task_always_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = serde_json::json!({"path": dir.path().to_string_lossy()}).to_string();
+        let (task, _, mut remove_rx) = make_test_task("ls5", &params);
+        execute(task).await;
+        let id = remove_rx.recv().await.unwrap();
+        assert_eq!(id, "ls5");
     }
 }
