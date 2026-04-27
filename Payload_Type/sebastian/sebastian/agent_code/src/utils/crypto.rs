@@ -159,44 +159,101 @@ pub fn aes_decrypt(key: &[u8], encrypted_bytes: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    const KEY: &[u8; 32] = b"01234567890123456789012345678901";
+
+    // -------------------------------------------------------------------------
+    // AES
+    // -------------------------------------------------------------------------
+
     #[test]
     fn test_aes_encrypt_decrypt_roundtrip() {
-        let key = b"01234567890123456789012345678901"; // 32 bytes
         let plaintext = b"Hello, Sebastian!";
-
-        let encrypted = aes_encrypt(key, plaintext);
+        let encrypted = aes_encrypt(KEY, plaintext);
         assert!(!encrypted.is_empty());
-
-        let decrypted = aes_decrypt(key, &encrypted);
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(aes_decrypt(KEY, &encrypted), plaintext);
     }
 
     #[test]
     fn test_aes_empty_data() {
-        let key = b"01234567890123456789012345678901";
-        let plaintext = b"";
-
-        let encrypted = aes_encrypt(key, plaintext);
+        let encrypted = aes_encrypt(KEY, b"");
         assert!(!encrypted.is_empty());
-
-        let decrypted = aes_decrypt(key, &encrypted);
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(aes_decrypt(KEY, &encrypted), b"");
     }
 
     #[test]
-    fn test_aes_tampered_data() {
-        let key = b"01234567890123456789012345678901";
+    fn test_aes_tampered_ciphertext_fails_hmac() {
         let plaintext = b"Hello, Sebastian!";
-
-        let mut encrypted = aes_encrypt(key, plaintext);
-        // Tamper with ciphertext
+        let mut encrypted = aes_encrypt(KEY, plaintext);
+        // Flip a byte in the ciphertext region (after IV, before HMAC)
         if encrypted.len() > AES_BLOCK_SIZE + 1 {
             encrypted[AES_BLOCK_SIZE + 1] ^= 0xFF;
         }
-
-        let decrypted = aes_decrypt(key, &encrypted);
-        assert!(decrypted.is_empty()); // HMAC should fail
+        assert!(aes_decrypt(KEY, &encrypted).is_empty());
     }
+
+    #[test]
+    fn test_aes_tampered_hmac_fails() {
+        let plaintext = b"tamper the mac";
+        let mut encrypted = aes_encrypt(KEY, plaintext);
+        // Flip the last byte of the HMAC
+        let last = encrypted.len() - 1;
+        encrypted[last] ^= 0x01;
+        assert!(aes_decrypt(KEY, &encrypted).is_empty());
+    }
+
+    #[test]
+    fn test_aes_wrong_key_fails_hmac() {
+        let encrypted = aes_encrypt(KEY, b"secret");
+        let wrong_key = b"99999999999999999999999999999999";
+        assert!(aes_decrypt(wrong_key, &encrypted).is_empty());
+    }
+
+    #[test]
+    fn test_aes_short_key_encrypt_returns_empty() {
+        let short_key = b"tooshort";
+        assert!(aes_encrypt(short_key, b"data").is_empty());
+    }
+
+    #[test]
+    fn test_aes_short_key_decrypt_returns_empty() {
+        let short_key = b"tooshort";
+        assert!(aes_decrypt(short_key, &[0u8; 64]).is_empty());
+    }
+
+    #[test]
+    fn test_aes_ciphertext_too_short_returns_empty() {
+        // Minimum valid ciphertext is IV(16) + one block(16) + HMAC(32) = 64 bytes.
+        // Passing 47 bytes must fail gracefully.
+        assert!(aes_decrypt(KEY, &[0u8; 47]).is_empty());
+    }
+
+    #[test]
+    fn test_aes_block_aligned_data() {
+        // 16 bytes — exactly one AES block. PKCS7 adds a full padding block.
+        let plaintext = b"0123456789ABCDEF";
+        let encrypted = aes_encrypt(KEY, plaintext);
+        assert_eq!(aes_decrypt(KEY, &encrypted), plaintext);
+    }
+
+    #[test]
+    fn test_aes_large_data() {
+        let plaintext = vec![0xABu8; 1024 * 512]; // 512 KB
+        let encrypted = aes_encrypt(KEY, &plaintext);
+        assert_eq!(aes_decrypt(KEY, &encrypted), plaintext);
+    }
+
+    #[test]
+    fn test_aes_iv_randomness() {
+        // Two encryptions of the same plaintext must produce different ciphertexts
+        // (different random IVs).
+        let ct1 = aes_encrypt(KEY, b"same plaintext");
+        let ct2 = aes_encrypt(KEY, b"same plaintext");
+        assert_ne!(ct1, ct2);
+    }
+
+    // -------------------------------------------------------------------------
+    // RSA
+    // -------------------------------------------------------------------------
 
     #[test]
     fn test_rsa_keypair_generation() {
@@ -207,12 +264,42 @@ mod tests {
     }
 
     #[test]
-    fn test_aes_large_data() {
-        let key = b"01234567890123456789012345678901";
-        let plaintext = vec![0xABu8; 1024 * 512]; // 512KB
+    fn test_rsa_encrypt_decrypt_roundtrip() {
+        let (pub_pem, priv_key) = generate_rsa_keypair().unwrap();
 
-        let encrypted = aes_encrypt(key, &plaintext);
-        let decrypted = aes_decrypt(key, &encrypted);
+        // Parse the PEM public key back to DER for rsa_encrypt_bytes
+        let pem_str = std::str::from_utf8(&pub_pem).unwrap();
+        use rsa::pkcs1::{DecodeRsaPublicKey, EncodeRsaPublicKey};
+        let pub_key = rsa::RsaPublicKey::from_pkcs1_pem(pem_str).unwrap();
+        let pub_der = pub_key.to_pkcs1_der().unwrap().to_vec();
+
+        let plaintext = b"RSA round-trip test";
+        let ciphertext = rsa_encrypt_bytes(plaintext, &pub_der);
+        assert!(!ciphertext.is_empty());
+
+        let decrypted = rsa_decrypt_cipher_bytes(&ciphertext, &priv_key);
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_rsa_decrypt_wrong_key_returns_empty() {
+        let (pub_pem, _priv_key) = generate_rsa_keypair().unwrap();
+        let (_, wrong_priv_key) = generate_rsa_keypair().unwrap();
+
+        let pem_str = std::str::from_utf8(&pub_pem).unwrap();
+        use rsa::pkcs1::{DecodeRsaPublicKey, EncodeRsaPublicKey};
+        let pub_key = rsa::RsaPublicKey::from_pkcs1_pem(pem_str).unwrap();
+        let pub_der = pub_key.to_pkcs1_der().unwrap().to_vec();
+
+        let ciphertext = rsa_encrypt_bytes(b"secret", &pub_der);
+        let result = rsa_decrypt_cipher_bytes(&ciphertext, &wrong_priv_key);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_rsa_encrypt_bad_public_key_returns_empty() {
+        // Garbage DER bytes must not panic
+        let result = rsa_encrypt_bytes(b"data", &[0u8; 32]);
+        assert!(result.is_empty());
     }
 }

@@ -68,5 +68,9 @@ png = "0.17"
 objc = "0.2"
 core-graphics = "0.24"
 
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"
+
 [build-dependencies]
 prost-build = "0.13"

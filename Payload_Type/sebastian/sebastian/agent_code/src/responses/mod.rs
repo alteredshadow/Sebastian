@@ -445,3 +445,161 @@ pub async fn send_exit_message(get_push_channel: fn() -> Option<mpsc::Sender<Myt
         crate::utils::print_debug("Exit flag set for next poll cycle");
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::structs::{Response, SocksMsg};
+    use serial_test::serial;
+
+    // -------------------------------------------------------------------------
+    // get_chunk_nums — pure function, no global state
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_chunk_nums_zero_bytes_is_one_chunk() {
+        assert_eq!(get_chunk_nums(0), 1);
+    }
+
+    #[test]
+    fn test_chunk_nums_one_byte_is_one_chunk() {
+        assert_eq!(get_chunk_nums(1), 1);
+    }
+
+    #[test]
+    fn test_chunk_nums_exact_boundary_is_one_chunk() {
+        assert_eq!(get_chunk_nums(USER_OUTPUT_CHUNK_SIZE), 1);
+    }
+
+    #[test]
+    fn test_chunk_nums_one_over_boundary_is_two_chunks() {
+        assert_eq!(get_chunk_nums(USER_OUTPUT_CHUNK_SIZE + 1), 2);
+    }
+
+    #[test]
+    fn test_chunk_nums_double_boundary_is_two_chunks() {
+        assert_eq!(get_chunk_nums(USER_OUTPUT_CHUNK_SIZE * 2), 2);
+    }
+
+    #[test]
+    fn test_chunk_nums_double_plus_one_is_three_chunks() {
+        assert_eq!(get_chunk_nums(USER_OUTPUT_CHUNK_SIZE * 2 + 1), 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // buffer_failed_message — touches global POLL_BUFFER; run serially
+    // -------------------------------------------------------------------------
+
+    /// Drain any leftover state so each serial test starts clean.
+    fn clean_buffer() {
+        let _ = drain_poll_buffer();
+        EXIT_REQUESTED.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    #[serial]
+    fn test_buffer_failed_message_drops_socks_and_rpfwd() {
+        clean_buffer();
+
+        let mut msg = MythicMessage::new_get_tasking();
+        msg.socks = Some(vec![SocksMsg {
+            server_id: 1,
+            data: "AAAA".to_string(),
+            exit: false,
+            port: 0,
+        }]);
+        msg.rpfwds = Some(vec![SocksMsg {
+            server_id: 2,
+            data: "BBBB".to_string(),
+            exit: false,
+            port: 0,
+        }]);
+        msg.responses = Some(vec![Response {
+            task_id: "t1".to_string(),
+            user_output: "kept".to_string(),
+            completed: true,
+            ..Default::default()
+        }]);
+
+        buffer_failed_message(msg);
+        let drained = drain_poll_buffer();
+
+        // Socks and rpfwd must be stripped
+        assert!(drained.socks.is_none() || drained.socks.as_ref().unwrap().is_empty());
+        assert!(drained.rpfwds.is_none() || drained.rpfwds.as_ref().unwrap().is_empty());
+
+        // Task response must be preserved
+        let responses = drained.responses.expect("responses must be present");
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].user_output, "kept");
+
+        clean_buffer();
+    }
+
+    #[test]
+    #[serial]
+    fn test_drain_poll_buffer_action_is_get_tasking() {
+        clean_buffer();
+        let msg = drain_poll_buffer();
+        assert_eq!(msg.action, "get_tasking");
+    }
+
+    #[test]
+    #[serial]
+    fn test_drain_poll_buffer_clears_responses() {
+        clean_buffer();
+
+        // Buffer a response via buffer_failed_message (simplest path to POLL_BUFFER)
+        let mut msg = MythicMessage::new_get_tasking();
+        msg.responses = Some(vec![Response {
+            task_id: "t2".to_string(),
+            user_output: "output".to_string(),
+            completed: true,
+            ..Default::default()
+        }]);
+        buffer_failed_message(msg);
+
+        // First drain should return the response
+        let first = drain_poll_buffer();
+        assert!(first.responses.is_some());
+
+        // Second drain should be empty — buffer was consumed
+        let second = drain_poll_buffer();
+        assert!(second.responses.is_none() || second.responses.unwrap().is_empty());
+
+        clean_buffer();
+    }
+
+    #[test]
+    #[serial]
+    fn test_large_response_is_chunked() {
+        clean_buffer();
+
+        // Build a response just over the chunk boundary
+        let big_output = "X".repeat(USER_OUTPUT_CHUNK_SIZE + 1);
+        let mut msg = MythicMessage::new_get_tasking();
+        msg.responses = Some(vec![Response {
+            task_id: "t3".to_string(),
+            user_output: big_output,
+            completed: true,
+            ..Default::default()
+        }]);
+        buffer_failed_message(msg);
+
+        let drained = drain_poll_buffer();
+        let responses = drained.responses.expect("responses required");
+        // Must be split into at least 2 chunks
+        assert!(responses.len() >= 2, "expected chunking, got {} chunks", responses.len());
+        // Only the last chunk should be marked completed
+        for r in &responses[..responses.len() - 1] {
+            assert!(!r.completed, "intermediate chunks must not be completed");
+        }
+        assert!(responses.last().unwrap().completed);
+
+        clean_buffer();
+    }
+}
