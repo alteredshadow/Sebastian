@@ -7,6 +7,9 @@ pub mod structs;
 pub mod tasks;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 /// Auto-start when loaded as a shared library on macOS.
 /// Uses raw pthread_create instead of std::thread::spawn because Rust's
 /// standard library may not be fully initialized during __mod_init_func.
